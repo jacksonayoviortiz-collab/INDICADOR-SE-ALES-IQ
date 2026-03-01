@@ -8,3 +8,5 @@ python-dotenv==1.0.0
 scikit-learn==1.2.2
 joblib==1.2.0
 git+https://github.com/williamsandi/iqoptionapi-2025-Actualizada.git
+# Instrucción para desinstalar versiones viejas antes de instalar nuevas
+--upgrade-strategy eager
