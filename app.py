@@ -1,6 +1,6 @@
 """
 Sistema Profesional de Trading IQ Option - TOP 4 SCANNER
-Versión: 10.0 (corregido: sin repetición de activos, compatible con Python 3.11+)
+Versión: 10.0 (compatible con Python 3.12, sin repetición de activos)
 """
 
 import streamlit as st
@@ -40,7 +40,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS personalizado (se mantiene igual)
+# CSS personalizado para diseño profesional (mantenido igual)
 st.markdown("""
 <style>
     .stApp { background-color: #131722; color: #d1d4dc; }
@@ -99,7 +99,7 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CLASE DE CONEXIÓN CON IQ OPTION
+# CLASE DE CONEXIÓN CON IQ OPTION (MEJORADA)
 # ============================================
 class IQOptionConnector:
     def __init__(self):
@@ -137,6 +137,7 @@ class IQOptionConnector:
             return []
         ahora = time.time()
         cache_key = f"{mercado}_{max_activos}"
+        # Cache por 5 minutos
         if (self.ultima_actualizacion_activos and
             ahora - self.ultima_actualizacion_activos < 300 and
             cache_key in self.activos_cache):
@@ -165,7 +166,8 @@ class IQOptionConnector:
         if not self.conectado:
             return None
         try:
-            time.sleep(0.2)  # Pausa para no saturar
+            # Pequeña pausa para no saturar la API
+            time.sleep(0.2)
             velas = self.api.get_candles(activo, 60, limite * 5, time.time())
             if not velas or len(velas) == 0:
                 return None
@@ -227,29 +229,35 @@ def generar_score(df):
     prev = df.iloc[-2]
     score = 50
 
+    # Tendencia EMAs
     if ult['ema_20'] > ult['ema_50']:
         score += 10
     else:
         score -= 10
 
+    # Cruce de EMAs
     if prev['ema_20'] < prev['ema_50'] and ult['ema_20'] > ult['ema_50']:
         score += 30
     elif prev['ema_20'] > prev['ema_50'] and ult['ema_20'] < ult['ema_50']:
         score += 30
 
+    # RSI extremo
     if ult['rsi'] < 30:
         score += 20
     elif ult['rsi'] > 70:
         score += 20
 
+    # Bandas de Bollinger
     if ult['bb_pos'] < 0.1:
         score += 15
     elif ult['bb_pos'] > 0.9:
         score += 15
 
+    # Volumen alto
     if ult['volume_ratio'] > 1.5:
         score += 15
 
+    # Momentum fuerte
     if abs(ult['momentum']) > 2:
         score += 10
 
@@ -263,12 +271,14 @@ def detectar_senal(df):
     senal = None
     prob = 50
 
+    # Cruce de EMAs
     if prev['ema_20'] < prev['ema_50'] and ult['ema_20'] > ult['ema_50']:
         senal = 'COMPRA'
         prob = 75
     elif prev['ema_20'] > prev['ema_50'] and ult['ema_20'] < ult['ema_50']:
         senal = 'VENTA'
         prob = 75
+    # Bandas de Bollinger + RSI
     elif ult['close'] <= ult['BBL'] and ult['rsi'] < 30:
         senal = 'COMPRA'
         prob = 80
@@ -276,13 +286,14 @@ def detectar_senal(df):
         senal = 'VENTA'
         prob = 80
 
+    # Ajuste por volumen
     if senal and ult['volume_ratio'] > 1.3:
         prob = min(95, prob + 10)
 
     return senal, int(prob)
 
 # ============================================
-# ANÁLISIS DE ACTIVO
+# FUNCIÓN DE ANÁLISIS DE ACTIVOS (INDIVIDUAL)
 # ============================================
 def analizar_activo(activo, connector):
     df = connector.obtener_velas(activo, intervalo=5, limite=100)
@@ -309,7 +320,7 @@ def analizar_activo(activo, connector):
     }
 
 # ============================================
-# ACTUALIZAR TOP 4 (SIN REPETIR)
+# FUNCIÓN PARA ACTUALIZAR TOP 4 (SIN REPETIR)
 # ============================================
 def actualizar_top_activos(connector, mercado, max_activos=50):
     activos_lista = connector.obtener_activos_disponibles(mercado, max_activos)
@@ -319,6 +330,7 @@ def actualizar_top_activos(connector, mercado, max_activos=50):
     progreso = st.progress(0)
     total = len(activos_lista)
     for i, activo in enumerate(activos_lista):
+        # Pequeña pausa para no exceder límites de API
         time.sleep(0.1)
         res = analizar_activo(activo, connector)
         if res:
@@ -326,7 +338,7 @@ def actualizar_top_activos(connector, mercado, max_activos=50):
         progreso.progress((i + 1) / total)
     progreso.empty()
 
-    # Eliminar duplicados (por si acaso)
+    # Eliminar duplicados por si acaso (no debería haber, pero por seguridad)
     vistos = set()
     resultados_unicos = []
     for r in resultados:
@@ -358,7 +370,7 @@ def main():
     if 'mercado_actual' not in st.session_state:
         st.session_state.mercado_actual = "otc"
 
-    # Barra lateral
+    # Barra lateral - Login y controles
     with st.sidebar:
         st.image("https://i.imgur.com/6QhQx8L.png", width=200)
         st.markdown("### 🔐 Acceso IQ Option")
@@ -421,6 +433,7 @@ def main():
     # Verificar conexión
     if not st.session_state.conectado:
         st.info("👆 Conéctate a IQ Option en la barra lateral para comenzar")
+        # Mostrar 4 tarjetas vacías
         cols = st.columns(4)
         for i in range(4):
             with cols[i]:
@@ -432,7 +445,7 @@ def main():
                 """, unsafe_allow_html=True)
         return
 
-    # Botón de actualización manual
+    # Botón de actualización manual y timestamp
     col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
         if st.button("🔄 ACTUALIZAR ANÁLISIS", use_container_width=True):
@@ -452,7 +465,7 @@ def main():
 
     st.markdown("---")
 
-    # Mostrar las 4 tarjetas
+    # Mostrar las 4 tarjetas (siempre 4)
     st.subheader("🔥 TOP 4 ACTIVOS CON MAYOR POTENCIAL")
 
     if not st.session_state.top_activos:
@@ -467,6 +480,7 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
     else:
+        # Asegurar que siempre se muestren 4 tarjetas (rellenar con placeholders si es necesario)
         activos_mostrar = st.session_state.top_activos.copy()
         while len(activos_mostrar) < 4:
             activos_mostrar.append(None)
@@ -488,9 +502,19 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                 else:
-                    signal_class = "signal-compra" if activo['senal'] == 'COMPRA' else "signal-venta" if activo['senal'] == 'VENTA' else "signal-neutral"
-                    signal_text = f"📈 {activo['senal']} - {activo['probabilidad']}%" if activo['senal'] else "⚪ NEUTRAL"
-                    color_prob = "#00c864" if activo['senal'] == 'COMPRA' else "#ff4646" if activo['senal'] == 'VENTA' else "#9ca3af"
+                    # Determinar estilo de señal
+                    if activo['senal'] == 'COMPRA':
+                        signal_class = "signal-compra"
+                        signal_text = f"📈 {activo['senal']} - {activo['probabilidad']}%"
+                        color_prob = "#00c864"
+                    elif activo['senal'] == 'VENTA':
+                        signal_class = "signal-venta"
+                        signal_text = f"📉 {activo['senal']} - {activo['probabilidad']}%"
+                        color_prob = "#ff4646"
+                    else:
+                        signal_class = "signal-neutral"
+                        signal_text = "⚪ NEUTRAL"
+                        color_prob = "#9ca3af"
 
                     st.markdown(f"""
                     <div class="asset-card">
@@ -512,6 +536,7 @@ def main():
         mejor = st.session_state.top_activos[0]
         st.subheader(f"📈 Análisis Detallado: {mejor['activo']}")
 
+        # Alerta anticipada (1 minuto antes)
         ahora = datetime.now(ecuador_tz)
         minutos = ahora.minute
         minuto_base = (minutos // 5) * 5
@@ -529,30 +554,64 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
+        # Gráfico con Plotly
         if mejor['df'] is not None and len(mejor['df']) > 20:
             df_graf = mejor['df'].iloc[-50:].copy()
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-                                row_heights=[0.6, 0.2, 0.2],
-                                subplot_titles=("Precio", "RSI", "Volumen"))
-            fig.add_trace(go.Candlestick(x=df_graf.index, open=df_graf['open'], high=df_graf['high'],
-                                          low=df_graf['low'], close=df_graf['close'],
-                                          increasing_line_color='#00c864', decreasing_line_color='#ff4644'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_20'], line=dict(color='#2962ff', width=2)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_50'], line=dict(color='#ffaa00', width=2)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['BBU'], line=dict(color='#888', dash='dash')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['BBL'], line=dict(color='#888', dash='dash')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['rsi'], line=dict(color='white', width=2)), row=2, col=1)
+            fig = make_subplots(
+                rows=3, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.05,
+                row_heights=[0.6, 0.2, 0.2],
+                subplot_titles=("Precio", "RSI", "Volumen")
+            )
+            # Velas
+            fig.add_trace(go.Candlestick(
+                x=df_graf.index,
+                open=df_graf['open'],
+                high=df_graf['high'],
+                low=df_graf['low'],
+                close=df_graf['close'],
+                name="",
+                increasing_line_color='#00c864',
+                decreasing_line_color='#ff4646'
+            ), row=1, col=1)
+            # EMAs
+            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_20'],
+                                      line=dict(color='#2962ff', width=2), name="EMA 20"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_50'],
+                                      line=dict(color='#ffaa00', width=2), name="EMA 50"), row=1, col=1)
+            # Bandas de Bollinger
+            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['BBU'],
+                                      line=dict(color='#888', dash='dash'), name="BB Sup"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['BBL'],
+                                      line=dict(color='#888', dash='dash'), name="BB Inf"), row=1, col=1)
+            # RSI
+            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['rsi'],
+                                      line=dict(color='white', width=2), name="RSI"), row=2, col=1)
             fig.add_hline(y=70, line_dash="dash", line_color="red", row=2)
             fig.add_hline(y=30, line_dash="dash", line_color="#00c864", row=2)
-            colors_vol = ['#00c864' if df_graf['close'].iloc[i] >= df_graf['close'].iloc[i-1] else '#ff4644' for i in range(1, len(df_graf))]
+            # Volumen
+            colors_vol = ['#00c864' if df_graf['close'].iloc[i] >= df_graf['close'].iloc[i-1]
+                         else '#ff4646' for i in range(1, len(df_graf))]
             colors_vol.insert(0, '#00c864')
-            fig.add_trace(go.Bar(x=df_graf.index, y=df_graf['volume'], marker_color=colors_vol), row=3, col=1)
-            fig.update_layout(height=700, template="plotly_dark", paper_bgcolor="#131722", plot_bgcolor="#131722",
-                              font_color="#d1d4dc", hovermode="x unified", showlegend=False)
+            fig.add_trace(go.Bar(x=df_graf.index, y=df_graf['volume'],
+                                  marker_color=colors_vol, name="Volumen"), row=3, col=1)
+
+            fig.update_layout(
+                height=700,
+                template="plotly_dark",
+                paper_bgcolor="#131722",
+                plot_bgcolor="#131722",
+                font_color="#d1d4dc",
+                hovermode="x unified",
+                showlegend=False
+            )
             fig.update_xaxes(gridcolor="#2a2e39")
             fig.update_yaxes(gridcolor="#2a2e39")
             st.plotly_chart(fig, use_container_width=True)
 
+            # Panel de detalles
+            st.subheader("🔍 Detalles del Activo Principal")
             ult = mejor['df'].iloc[-1]
             cols = st.columns(4)
             with cols[0]:
@@ -566,6 +625,7 @@ def main():
         else:
             st.warning("Datos insuficientes para gráfico detallado")
 
+    # Modo replay (opcional)
     st.markdown("---")
     if st.button("🎮 Modo Replay (Siguiente vela)"):
         st.session_state.ultima_actualizacion = None
