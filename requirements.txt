@@ -1,12 +1,21 @@
-streamlit==1.28.1
-pandas==2.0.3
-numpy==1.24.3
-plotly==5.17.0
-requests==2.31.0
-pytz==2023.3
-ta==0.10.2
-scikit-learn==1.3.0
-joblib==1.3.2
-xgboost==1.7.6
-python-dotenv==1.0.0
--e git+https://github.com/williansandi/iqoptionapi-2025-Atualizada-.git#egg=iqoptionapi
+# Librerías base para la app web y datos
+streamlit==1.32.2  # Versión más reciente y estable
+pandas==2.2.2      # Compatible con Python 3.13 y mantiene todas las funciones de manejo de datos
+numpy==1.26.4      # Mejor compatibilidad con pandas 2.2.2
+
+# Librerías para gráficos y visualización
+plotly==5.20.0     # Versión avanzada con más tipos de gráficos
+
+# Librerías para IA y análisis predictivo
+scikit-learn==1.3.2 # Última versión estable, mantiene todas las funciones de ML
+xgboost==2.0.3     # Compatible con scikit-learn y Python 3.13
+joblib==1.3.2      # Necesaria para guardar/cargar modelos de ML
+
+# Librerías para IQ Option y comunicación
+requests==2.31.0   # Estable y compatible con la API de IQ Option
+ta==0.10.2         # Mantiene todas las funciones de análisis técnico
+python-dotenv==1.0.0 # Para manejar variables de entorno de forma segura
+
+# Herramientas de apoyo para instalación
+setuptools>=68.0.0
+wheel>=0.42.0
