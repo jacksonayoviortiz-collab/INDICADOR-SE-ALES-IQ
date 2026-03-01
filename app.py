@@ -1,6 +1,6 @@
 """
 Sistema Profesional de Trading IQ Option - TOP 4 SCANNER
-Versión: 10.0 (compatible con Python 3.12, sin repetición de activos)
+Versión: 11.0 (compatible con Python 3.13, numpy 2, streamlit 1.40)
 """
 
 import streamlit as st
@@ -23,10 +23,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 try:
     from iqoptionapi.stable_api import IQ_Option
     IQ_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     IQ_AVAILABLE = False
-    st.error("""
-    ⚠️ No se pudo importar la librería iqoptionapi.
+    st.error(f"""
+    ⚠️ No se pudo importar la librería iqoptionapi: {e}
     Por favor verifica la instalación o usa una versión alternativa.
     """)
 
@@ -40,7 +40,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS personalizado para diseño profesional (mantenido igual)
+# CSS personalizado (igual que antes)
 st.markdown("""
 <style>
     .stApp { background-color: #131722; color: #d1d4dc; }
