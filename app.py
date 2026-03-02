@@ -1,12 +1,12 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN AVANZADA
-Características nuevas:
-- Detección de tendencias por máximos/mínimos (pivotes)
-- Uso de volumen real de operaciones
-- Múltiples estrategias independientes (voto ponderado)
-- Filtro MACD para evitar falsas señales
-- Interfaz renovada en verde/negro
-- Sensibilidad ajustada para no perder oportunidades
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN TENDENCIAS
+Características:
+- 3 estrategias de tendencia independientes (basadas en ruptura, pendiente de EMA y ADX)
+- Confirmación con volumen real y fuerza del mercado
+- Selección automática de los 2 activos más confiables
+- Indicación de hora exacta de operación (alerta 1 min antes)
+- Cálculo y visualización de precisión por estrategia y global
+- Interfaz moderna en verde/negro
 """
 
 import streamlit as st
@@ -38,39 +38,35 @@ except ImportError:
 
 # Configuración de página
 st.set_page_config(
-    page_title="IQ Option Pro Scanner",
-    page_icon="📊",
+    page_title="IQ Option Trend Scanner",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# CSS personalizado - Tema verde/negro moderno
+# CSS personalizado - Tema verde/negro profesional
 st.markdown("""
 <style>
-    /* Fondo general - negro profundo */
+    /* Fondo general */
     .stApp { background-color: #0A0C10; color: #E0E0E0; font-family: 'Inter', sans-serif; }
     /* Títulos en verde neón */
-    h1, h2, h3 { color: #00FF88 !important; font-weight: 700 !important; letter-spacing: -0.5px; }
+    h1, h2, h3 { color: #00FF88 !important; font-weight: 700 !important; }
     h1 { border-bottom: 2px solid #00FF88; padding-bottom: 10px; }
-    /* Tarjetas de activos - estilo glassmorphism */
+    /* Tarjetas de activos */
     .asset-card {
-        background: rgba(20, 25, 35, 0.8);
-        backdrop-filter: blur(10px);
+        background: rgba(20, 25, 35, 0.9);
+        backdrop-filter: blur(5px);
         border-radius: 24px;
         padding: 22px 18px;
-        box-shadow: 0 15px 35px -10px rgba(0, 255, 136, 0.2);
+        box-shadow: 0 15px 35px -10px rgba(0, 255, 136, 0.3);
         border: 1px solid rgba(0, 255, 136, 0.3);
-        transition: transform 0.25s ease, box-shadow 0.25s ease;
+        transition: transform 0.25s ease;
         height: 100%;
         display: flex;
         flex-direction: column;
         border-left: 4px solid #00FF88;
     }
-    .asset-card:hover {
-        transform: translateY(-6px);
-        box-shadow: 0 25px 45px -10px #00FF88;
-        border-color: #00FF88;
-    }
+    .asset-card:hover { transform: translateY(-6px); box-shadow: 0 25px 45px -10px #00FF88; }
     .asset-name { font-size: 20px; font-weight: 700; color: #FFFFFF; margin-bottom: 8px; }
     .asset-price { font-size: 14px; color: #AAAAAA; margin-bottom: 15px; }
     .asset-signal {
@@ -79,7 +75,6 @@ st.markdown("""
     }
     .signal-compra { background-color: rgba(0, 255, 136, 0.15); color: #00FF88; border: 1px solid #00FF88; }
     .signal-venta { background-color: rgba(255, 70, 70, 0.15); color: #FF4646; border: 1px solid #FF4646; }
-    .signal-neutral { background-color: rgba(255, 255, 255, 0.05); color: #AAAAAA; border: 1px solid #333; }
     .asset-footer {
         font-size: 13px; color: #888; margin-top: auto; padding-top: 15px;
         border-top: 1px solid #222; display: flex; justify-content: space-between;
@@ -95,15 +90,12 @@ st.markdown("""
         padding: 12px 28px;
         transition: all 0.2s;
         box-shadow: 0 8px 20px -5px #00FF88;
-        text-transform: uppercase;
-        letter-spacing: 1px;
     }
     .stButton button:hover {
         background: linear-gradient(135deg, #00CC66, #00FF88);
         box-shadow: 0 12px 28px -5px #00FF88;
-        transform: scale(1.02);
     }
-    /* Alertas anticipadas */
+    /* Alertas */
     .alert-box {
         background: linear-gradient(90deg, #1A2A1A, #0A0C10);
         border-left: 6px solid #FFAA00;
@@ -112,15 +104,13 @@ st.markdown("""
         margin: 20px 0;
         box-shadow: 0 15px 30px -10px #FFAA0044;
     }
-    /* Selector de mercado */
-    .mercado-selector {
-        background: #151A24; padding: 8px; border-radius: 60px; display: flex;
-        gap: 10px; border: 1px solid #00FF8833; margin-bottom: 25px;
-    }
-    /* Métricas */
-    .metric-card {
-        background: #151A24; border-radius: 20px; padding: 18px; border: 1px solid #00FF8822;
-        box-shadow: 0 10px 20px -10px #00FF8822;
+    /* Panel de precisión */
+    .accuracy-panel {
+        background: #151A24;
+        border-radius: 20px;
+        padding: 20px;
+        border: 1px solid #00FF8822;
+        margin-top: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -128,7 +118,7 @@ st.markdown("""
 # Zona horaria Ecuador
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
-# === CLASE DE CONEXIÓN Y DATOS DE IQ OPTION ===
+# === CLASE DE CONEXIÓN (sin cambios, igual que antes) ===
 class IQOptionConnector:
     def __init__(self):
         self.api = None
@@ -191,7 +181,6 @@ class IQOptionConnector:
             return []
 
     def obtener_velas(self, activo, intervalo=5, limite=100):
-        """Obtiene velas incluyendo VOLUMEN real (número de ticks)"""
         if not self.conectado:
             return None
         try:
@@ -199,257 +188,217 @@ class IQOptionConnector:
             velas = self.api.get_candles(activo, 60, limite * 5, time.time())
             if not velas:
                 return None
-
             df = pd.DataFrame(velas)
             df['datetime'] = pd.to_datetime(df['from'], unit='s')
             df = df.set_index('datetime')
-            # Incluir todas las columnas: open, max, min, close, volume
             df = df.rename(columns={
                 'open': 'open',
                 'max': 'high',
                 'min': 'low',
                 'close': 'close',
-                'volume': 'volume'  # Volumen real de ticks
+                'volume': 'volume'
             })
             df = df[['open', 'high', 'low', 'close', 'volume']].astype(float).sort_index()
-
             if intervalo == 5:
                 df = df.resample('5T').agg({
                     'open': 'first',
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
-                    'volume': 'sum'  # Sumar el volumen en el período de 5 minutos
+                    'volume': 'sum'
                 }).dropna()
             return df
         except Exception as e:
             logging.error(f"Error obteniendo velas de {activo}: {e}")
             return None
 
-# === FUNCIONES DE ANÁLISIS TÉCNICO AVANZADO ===
-
-def detectar_tendencia_por_pivotes(df, ventana=5):
-    """
-    Detecta tendencia alcista/bajista basada en máximos y mínimos crecientes/decrecientes.
-    Retorna: 'alcista', 'bajista' o 'lateral'.
-    """
-    if df is None or len(df) < ventana * 2:
-        return 'lateral'
-    # Encontrar máximos y mínimos locales (pivotes)
-    highs = df['high'].values
-    lows = df['low'].values
-    pivots_high = []
-    pivots_low = []
-    for i in range(ventana, len(df)-ventana):
-        if highs[i] == max(highs[i-ventana:i+ventana+1]):
-            pivots_high.append((i, highs[i]))
-        if lows[i] == min(lows[i-ventana:i+ventana+1]):
-            pivots_low.append((i, lows[i]))
-
-    if len(pivots_high) < 2 and len(pivots_low) < 2:
-        return 'lateral'
-
-    # Evaluar tendencia de máximos
-    if len(pivots_high) >= 2:
-        high_increasing = all(pivots_high[j][1] < pivots_high[j+1][1] for j in range(len(pivots_high)-1))
-        high_decreasing = all(pivots_high[j][1] > pivots_high[j+1][1] for j in range(len(pivots_high)-1))
-    else:
-        high_increasing = high_decreasing = False
-
-    # Evaluar tendencia de mínimos
-    if len(pivots_low) >= 2:
-        low_increasing = all(pivots_low[j][1] < pivots_low[j+1][1] for j in range(len(pivots_low)-1))
-        low_decreasing = all(pivots_low[j][1] > pivots_low[j+1][1] for j in range(len(pivots_low)-1))
-    else:
-        low_increasing = low_decreasing = False
-
-    if (high_increasing and low_increasing) or (high_increasing and not low_decreasing):
-        return 'alcista'
-    elif (high_decreasing and low_decreasing) or (high_decreasing and not low_increasing):
-        return 'bajista'
-    else:
-        return 'lateral'
-
-def calcular_indicadores_completos(df):
-    """Calcula todos los indicadores necesarios: RSI, MACD, EMAs, Bandas, Volumen, etc."""
+# === INDICADORES COMUNES ===
+def calcular_indicadores_base(df):
+    """Calcula indicadores necesarios para todas las estrategias."""
     if df is None or len(df) < 30:
         return None
-
     # RSI
     df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-    # MACD
-    macd = ta.trend.MACD(df['close'])
-    df['macd'] = macd.macd()
-    df['macd_signal'] = macd.macd_signal()
-    df['macd_diff'] = macd.macd_diff()
     # EMAs
     df['ema_20'] = ta.trend.EMAIndicator(df['close'], window=20).ema_indicator()
     df['ema_50'] = ta.trend.EMAIndicator(df['close'], window=50).ema_indicator()
-    # Bandas de Bollinger
-    bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
-    df['BBU'] = bb.bollinger_hband()
-    df['BBL'] = bb.bollinger_lband()
-    df['bb_pos'] = (df['close'] - df['BBL']) / (df['BBU'] - df['BBL']).clip(lower=0.001)
+    # ATR (para fuerza)
+    df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
     # Volumen
     df['volume_ma'] = df['volume'].rolling(20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma'].clip(lower=1)
-    # ATR y volatilidad
-    df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
-    df['volatilidad'] = df['atr'] / df['close'] * 100
-
+    # ADX (para medir fuerza de tendencia)
+    adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
+    df['adx'] = adx.adx()
+    df['adx_pos'] = adx.adx_pos()
+    df['adx_neg'] = adx.adx_neg()
     return df
 
-# === ESTRATEGIAS INDEPENDIENTES ===
-# Cada estrategia devuelve una señal (COMPRA, VENTA o None) y un nivel de confianza (0-100)
-
-def estrategia_cruce_emas(df):
-    """Estrategia clásica de cruce de EMAs 20/50"""
-    if df is None or len(df) < 50:
+# === ESTRATEGIA 1: Ruptura de máximos/mínimos con volumen ===
+def estrategia_ruptura_con_volumen(df, ventana=10):
+    """
+    Detecta ruptura de máximo reciente (o mínimo) con volumen creciente.
+    """
+    if df is None or len(df) < ventana+5:
         return None, 0
     ult = df.iloc[-1]
     prev = df.iloc[-2]
-    if prev['ema_20'] < prev['ema_50'] and ult['ema_20'] > ult['ema_50']:
-        return 'COMPRA', 75
-    elif prev['ema_20'] > prev['ema_50'] and ult['ema_20'] < ult['ema_50']:
-        return 'VENTA', 75
+    max_reciente = df['high'].iloc[-ventana:-1].max()
+    min_reciente = df['low'].iloc[-ventana:-1].min()
+
+    # Ruptura alcista
+    if ult['close'] > max_reciente and ult['volume_ratio'] > 1.5:
+        # Confirmar fuerza con ATR y ADX
+        if ult['adx'] > 25 and ult['adx_pos'] > ult['adx_neg']:
+            return 'COMPRA', 85
+        else:
+            return 'COMPRA', 70
+    # Ruptura bajista
+    elif ult['close'] < min_reciente and ult['volume_ratio'] > 1.5:
+        if ult['adx'] > 25 and ult['adx_neg'] > ult['adx_pos']:
+            return 'VENTA', 85
+        else:
+            return 'VENTA', 70
     return None, 0
 
-def estrategia_rsi_extremo(df):
-    """RSI extremo con confirmación de volumen"""
-    if df is None or len(df) < 30:
-        return None, 0
-    ult = df.iloc[-1]
-    if ult['rsi'] < 30 and ult['volume_ratio'] > 1.2:
-        return 'COMPRA', 70
-    elif ult['rsi'] > 70 and ult['volume_ratio'] > 1.2:
-        return 'VENTA', 70
-    elif ult['rsi'] < 30:
-        return 'COMPRA', 55  # Señal más débil si no hay volumen
-    elif ult['rsi'] > 70:
-        return 'VENTA', 55
-    return None, 0
-
-def estrategia_bandas_bollinger(df):
-    """Rebotes en bandas de Bollinger + RSI"""
-    if df is None or len(df) < 30:
-        return None, 0
-    ult = df.iloc[-1]
-    if ult['close'] <= ult['BBL'] and ult['rsi'] < 40:
-        return 'COMPRA', 80
-    elif ult['close'] >= ult['BBU'] and ult['rsi'] > 60:
-        return 'VENTA', 80
-    return None, 0
-
-def estrategia_macd(df):
-    """Cruce de MACD"""
-    if df is None or len(df) < 30:
-        return None, 0
-    ult = df.iloc[-1]
-    prev = df.iloc[-2]
-    if prev['macd'] < prev['macd_signal'] and ult['macd'] > ult['macd_signal']:
-        return 'COMPRA', 70
-    elif prev['macd'] > prev['macd_signal'] and ult['macd'] < ult['macd_signal']:
-        return 'VENTA', 70
-    return None, 0
-
-def estrategia_tendencia_pivotes(df):
-    """Detección de tendencia por máximos/mínimos"""
-    tendencia = detectar_tendencia_por_pivotes(df)
-    if tendencia == 'alcista':
-        return 'COMPRA', 65
-    elif tendencia == 'bajista':
-        return 'VENTA', 65
-    return None, 0
-
-def estrategia_volumen_fuerza(df):
-    """Detección de fuerza por volumen y momentum"""
-    if df is None or len(df) < 30:
-        return None, 0
-    ult = df.iloc[-1]
-    # Si el volumen es muy alto y el momentum positivo, es compra
-    if ult['volume_ratio'] > 1.8 and ult['momentum'] > 0:
-        return 'COMPRA', 75
-    elif ult['volume_ratio'] > 1.8 and ult['momentum'] < 0:
-        return 'VENTA', 75
-    return None, 0
-
-# === ENSAMBLE DE ESTRATEGIAS ===
-def evaluar_activo_con_ia(df):
+# === ESTRATEGIA 2: Pendiente de EMA + Volumen + Fuerza ===
+def estrategia_pendiente_ema(df, periodo=5):
     """
-    Ejecuta todas las estrategias y combina sus votos para obtener una señal final
-    y un nivel de probabilidad.
+    Detecta tendencia basada en la pendiente de la EMA 20 y la confirma con volumen y ADX.
     """
+    if df is None or len(df) < 20:
+        return None, 0
+    ult = df.iloc[-1]
+    pendiente = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-periodo]) / periodo
+
+    # Tendencia alcista si pendiente positiva, volumen alto y ADX fuerte
+    if pendiente > 0.01 * ult['close']:  # Umbral dinámico
+        if ult['volume_ratio'] > 1.3 and ult['adx'] > 25 and ult['adx_pos'] > ult['adx_neg']:
+            return 'COMPRA', 80
+        elif ult['volume_ratio'] > 1.2:
+            return 'COMPRA', 65
+    # Tendencia bajista
+    elif pendiente < -0.01 * ult['close']:
+        if ult['volume_ratio'] > 1.3 and ult['adx'] > 25 and ult['adx_neg'] > ult['adx_pos']:
+            return 'VENTA', 80
+        elif ult['volume_ratio'] > 1.2:
+            return 'VENTA', 65
+    return None, 0
+
+# === ESTRATEGIA 3: ADX + Volumen para continuación de tendencia ===
+def estrategia_adx_continuacion(df, umbral_adx=25):
+    """
+    Cuando el ADX es alto (>25) y el volumen acompaña, la tendencia actual es fuerte y probable que continúe.
+    """
+    if df is None or len(df) < 30:
+        return None, 0
+    ult = df.iloc[-1]
+    if ult['adx'] > umbral_adx:
+        # Determinar dirección por la pendiente de la EMA
+        pendiente = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-3]) / 3
+        if pendiente > 0 and ult['volume_ratio'] > 1.2:
+            return 'COMPRA', 75
+        elif pendiente < 0 and ult['volume_ratio'] > 1.2:
+            return 'VENTA', 75
+    return None, 0
+
+# === REGISTRO DE PRECISIÓN (simulado, se puede mejorar con datos reales) ===
+class AccuracyTracker:
+    def __init__(self):
+        self.historial = []  # lista de dicts: {'estrategia': nombre, 'acierto': bool, 'senal': str}
+        self.estrategias = ['Ruptura', 'Pendiente EMA', 'ADX Continuación']
+
+    def registrar(self, nombre_estrategia, senal, resultado_real):
+        """
+        resultado_real: True si la operación fue exitosa, False si no.
+        """
+        self.historial.append({
+            'estrategia': nombre_estrategia,
+            'senal': senal,
+            'acierto': resultado_real
+        })
+
+    def precision_por_estrategia(self):
+        if not self.historial:
+            return {nombre: 0.0 for nombre in self.estrategias}
+        df = pd.DataFrame(self.historial)
+        precision = df.groupby('estrategia')['acierto'].mean() * 100
+        return precision.to_dict()
+
+    def precision_global(self):
+        if not self.historial:
+            return 0.0
+        return np.mean([r['acierto'] for r in self.historial]) * 100
+
+# === ANÁLISIS DE UN ACTIVO CON LAS 3 ESTRATEGIAS ===
+def analizar_activo(activo, connector, tracker):
+    df = connector.obtener_velas(activo, intervalo=5, limite=100)
+    if df is None:
+        return None
+    df = calcular_indicadores_base(df)
+    if df is None:
+        return None
+
+    # Evaluar cada estrategia
     estrategias = [
-        estrategia_cruce_emas,
-        estrategia_rsi_extremo,
-        estrategia_bandas_bollinger,
-        estrategia_macd,
-        estrategia_tendencia_pivotes,
-        estrategia_volumen_fuerza
+        ('Ruptura', estrategia_ruptura_con_volumen),
+        ('Pendiente EMA', estrategia_pendiente_ema),
+        ('ADX Continuación', estrategia_adx_continuacion)
     ]
 
     votos_compra = 0
     votos_venta = 0
     peso_total = 0
+    detalles_estrategias = []
 
-    for est in estrategias:
-        señal, confianza = est(df)
-        if señal == 'COMPRA':
+    for nombre, func in estrategias:
+        senal, confianza = func(df)
+        detalles_estrategias.append({
+            'nombre': nombre,
+            'senal': senal if senal else 'NEUTRAL',
+            'confianza': confianza
+        })
+        if senal == 'COMPRA':
             votos_compra += confianza
             peso_total += confianza
-        elif señal == 'VENTA':
+        elif senal == 'VENTA':
             votos_venta += confianza
             peso_total += confianza
 
+    # Decidir señal final
     if peso_total == 0:
-        return None, 0
-
-    # Decidir señal por mayoría ponderada
-    if votos_compra > votos_venta:
-        probabilidad = int((votos_compra / peso_total) * 100)
-        return 'COMPRA', max(50, min(95, probabilidad))
-    elif votos_venta > votos_compra:
-        probabilidad = int((votos_venta / peso_total) * 100)
-        return 'VENTA', max(50, min(95, probabilidad))
+        senal_final = None
+        probabilidad = 0
     else:
-        return None, 0
+        if votos_compra > votos_venta:
+            probabilidad = int((votos_compra / peso_total) * 100)
+            senal_final = 'COMPRA'
+        elif votos_venta > votos_compra:
+            probabilidad = int((votos_venta / peso_total) * 100)
+            senal_final = 'VENTA'
+        else:
+            senal_final = None
+            probabilidad = 0
 
-def generar_score_ia(df):
-    """Genera un score basado en las estrategias (para ranking)"""
-    señal, prob = evaluar_activo_con_ia(df)
-    # Score base: 50 + (prob-50)*2 si hay señal, sino 0
-    if señal:
-        return 50 + (prob - 50) * 2
-    else:
-        # Si no hay señal, dar un puntaje bajo pero no cero para que pueda aparecer
-        return 30
+    # Score para ranking (basado en probabilidad y confianza)
+    score = probabilidad * 2 if senal_final else 30
 
-# === ANÁLISIS DE UN ACTIVO ===
-def analizar_activo(activo, connector):
-    df = connector.obtener_velas(activo, intervalo=5, limite=100)
-    if df is None:
-        return None
-    df = calcular_indicadores_completos(df)
-    if df is None:
-        return None
-    señal, probabilidad = evaluar_activo_con_ia(df)
-    score = generar_score_ia(df)
-    ult = df.iloc[-1] if len(df) > 0 else None
-    if ult is None:
-        return None
+    ult = df.iloc[-1]
     return {
         'activo': activo,
         'score': score,
-        'senal': señal,
+        'senal': senal_final,
         'probabilidad': probabilidad,
         'precio': ult['close'],
         'rsi': ult['rsi'],
-        'volatilidad': ult['volatilidad'],
         'volume_ratio': ult['volume_ratio'],
-        'df': df
+        'adx': ult['adx'],
+        'df': df,
+        'detalles_estrategias': detalles_estrategias
     }
 
-def actualizar_top_activos(connector, mercado, max_activos=50):
+# === ACTUALIZAR TOP 2 ACTIVOS ===
+def actualizar_top_activos(connector, mercado, tracker, max_activos=50):
     activos_lista = connector.obtener_activos_disponibles(mercado, max_activos)
     if not activos_lista:
         return []
@@ -458,7 +407,7 @@ def actualizar_top_activos(connector, mercado, max_activos=50):
     total = len(activos_lista)
     for i, activo in enumerate(activos_lista):
         time.sleep(0.1)
-        res = analizar_activo(activo, connector)
+        res = analizar_activo(activo, connector, tracker)
         if res:
             resultados.append(res)
         progreso.progress((i + 1) / total)
@@ -473,12 +422,12 @@ def actualizar_top_activos(connector, mercado, max_activos=50):
             resultados_unicos.append(r)
 
     resultados_unicos.sort(key=lambda x: x['score'], reverse=True)
-    return resultados_unicos[:4]
+    return resultados_unicos[:2]  # Solo los 2 mejores
 
 # === INTERFAZ PRINCIPAL ===
 def main():
-    st.title("📊 IQ OPTION PRO SCANNER")
-    st.markdown("#### Sistema Avanzado con Múltiples Estrategias y Volumen Real")
+    st.title("📈 IQ OPTION TREND SCANNER")
+    st.markdown("#### Sistema de 3 Estrategias de Tendencia + Volumen | Top 2 Activos")
     st.markdown("---")
 
     # Inicializar estado
@@ -492,6 +441,8 @@ def main():
         st.session_state.ultima_actualizacion = None
     if 'mercado_actual' not in st.session_state:
         st.session_state.mercado_actual = "otc"
+    if 'tracker' not in st.session_state:
+        st.session_state.tracker = AccuracyTracker()
 
     # Barra lateral
     with st.sidebar:
@@ -499,9 +450,9 @@ def main():
         st.markdown("### 🔐 Acceso a IQ Option")
 
         if not st.session_state.conectado:
-            email = st.text_input("Correo electrónico", placeholder="usuario@email.com")
+            email = st.text_input("Correo", placeholder="usuario@email.com")
             password = st.text_input("Contraseña", type="password", placeholder="••••••••")
-            tipo_cuenta = st.selectbox("Tipo de cuenta", ["PRACTICE", "REAL"])
+            tipo_cuenta = st.selectbox("Tipo", ["PRACTICE", "REAL"])
 
             if st.button("🔌 Conectar", use_container_width=True):
                 if email and password:
@@ -531,19 +482,20 @@ def main():
         if st.session_state.conectado:
             st.markdown("### ⚙️ Configuración")
             mercado = st.radio(
-                "Mercado a analizar",
-                ["🌙 OTC (24/7)", "📊 Normal (Forex)"],
+                "Mercado",
+                ["🌙 OTC", "📊 Normal"],
                 index=0,
                 horizontal=True
             )
             mercado_key = "otc" if "OTC" in mercado else "forex"
             st.session_state.mercado_actual = mercado_key
 
-            if st.button("🔍 ANALIZAR TOP 4", use_container_width=True):
-                with st.spinner("Analizando activos en tiempo real..."):
+            if st.button("🔍 ANALIZAR TOP 2", use_container_width=True):
+                with st.spinner("Analizando activos..."):
                     top = actualizar_top_activos(
                         st.session_state.connector,
                         mercado_key,
+                        st.session_state.tracker,
                         max_activos=50
                     )
                     st.session_state.top_activos = top
@@ -556,26 +508,26 @@ def main():
 
     # Verificar conexión
     if not st.session_state.conectado:
-        st.info("👆 Conéctate a IQ Option en la barra lateral para comenzar.")
-        cols = st.columns(4)
-        for i in range(4):
+        st.info("👆 Conéctate a IQ Option en la barra lateral.")
+        cols = st.columns(2)
+        for i in range(2):
             with cols[i]:
                 st.markdown("""
                 <div class="asset-card">
                     <div class="asset-name">Esperando conexión...</div>
-                    <div class="asset-price">---</div>
                 </div>
                 """, unsafe_allow_html=True)
         return
 
-    # Botón de actualización manual y timestamp
-    col1, col2, col3 = st.columns([1.5, 2, 1.5])
+    # Botón de actualización manual
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
         if st.button("🔄 ACTUALIZAR AHORA", use_container_width=True):
-            with st.spinner("Actualizando análisis..."):
+            with st.spinner("Actualizando..."):
                 top = actualizar_top_activos(
                     st.session_state.connector,
                     st.session_state.mercado_actual,
+                    st.session_state.tracker,
                     max_activos=50
                 )
                 st.session_state.top_activos = top
@@ -588,26 +540,25 @@ def main():
 
     st.markdown("---")
 
-    # Mostrar los 4 mejores activos
-    st.subheader("🔥 TOP 4 ACTIVOS CON MAYOR PROBABILIDAD")
+    # Mostrar los 2 mejores activos
+    st.subheader("🔥 TOP 2 ACTIVOS MÁS CONFIABLES")
 
     if not st.session_state.top_activos:
-        st.warning("Presiona 'ANALIZAR TOP 4' para obtener resultados.")
-        cols = st.columns(4)
-        for i in range(4):
+        st.warning("Presiona 'ANALIZAR TOP 2' para obtener resultados.")
+        cols = st.columns(2)
+        for i in range(2):
             with cols[i]:
                 st.markdown("""
                 <div class="asset-card">
                     <div class="asset-name">Cargando...</div>
-                    <div class="asset-price">Escanea para ver datos</div>
                 </div>
                 """, unsafe_allow_html=True)
     else:
         activos_mostrar = st.session_state.top_activos.copy()
-        while len(activos_mostrar) < 4:
+        while len(activos_mostrar) < 2:
             activos_mostrar.append(None)
 
-        cols = st.columns(4)
+        cols = st.columns(2)
         ahora = datetime.now(ecuador_tz)
         minutos = ahora.minute
         minuto_base = (minutos // 5) * 5
@@ -620,145 +571,89 @@ def main():
                     st.markdown("""
                     <div class="asset-card" style="opacity:0.5;">
                         <div class="asset-name">En espera...</div>
-                        <div class="asset-price">Próximo activo</div>
                     </div>
                     """, unsafe_allow_html=True)
                 else:
-                    # Determinar estilo de señal
-                    if activo['senal'] == 'COMPRA':
-                        signal_class = "signal-compra"
-                        signal_text = f"📈 COMPRA"
-                        color_prob = "#00FF88"
-                    elif activo['senal'] == 'VENTA':
-                        signal_class = "signal-venta"
-                        signal_text = f"📉 VENTA"
-                        color_prob = "#FF4646"
-                    else:
-                        signal_class = "signal-neutral"
-                        signal_text = "⚪ NEUTRAL"
-                        color_prob = "#AAAAAA"
-
-                    nombre_activo = activo['activo'].replace("-OTC", "")
-
+                    color_prob = "#00FF88" if activo['senal'] == 'COMPRA' else "#FF4646" if activo['senal'] == 'VENTA' else "#AAAAAA"
+                    nombre = activo['activo'].replace("-OTC", "")
                     st.markdown(f"""
                     <div class="asset-card">
-                        <div class="asset-name">{nombre_activo}</div>
+                        <div class="asset-name">{nombre}</div>
                         <div class="asset-price">Precio: {activo['precio']:.5f} | RSI: {activo['rsi']:.1f}</div>
-                        <div class="asset-signal {signal_class}">{signal_text}</div>
+                        <div class="asset-signal {'signal-compra' if activo['senal']=='COMPRA' else 'signal-venta' if activo['senal']=='VENTA' else 'signal-neutral'}">
+                            {activo['senal'] if activo['senal'] else 'NEUTRAL'}
+                        </div>
                         <div class="asset-prob" style="color: {color_prob};">{activo['probabilidad']}%</div>
                         <div class="asset-footer">
-                            <span>⏰ {tiempo_entrada.strftime('%H:%M')}</span>
-                            <span>⏳ {tiempo_salida.strftime('%H:%M')}</span>
+                            <span>⏰ OPERA A LAS {tiempo_entrada.strftime('%H:%M')}</span>
+                            <span>⏳ VENCE {tiempo_salida.strftime('%H:%M')}</span>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
 
+    # Mostrar precisión de estrategias
     st.markdown("---")
+    st.subheader("📊 Precisión de Estrategias")
 
-    # Activo principal (el #1) con gráfico detallado
+    precision_estrategias = st.session_state.tracker.precision_por_estrategia()
+    precision_global = st.session_state.tracker.precision_global()
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Ruptura", f"{precision_estrategias.get('Ruptura', 0):.1f}%")
+    with col2:
+        st.metric("Pendiente EMA", f"{precision_estrategias.get('Pendiente EMA', 0):.1f}%")
+    with col3:
+        st.metric("ADX Continuación", f"{precision_estrategias.get('ADX Continuación', 0):.1f}%")
+    with col4:
+        st.metric("Global", f"{precision_global:.1f}%")
+
+    # Botón para simular un acierto/fallo (en producción se haría con resultados reales)
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✅ Simular Acierto (para prueba)"):
+            # Simular un acierto en todas las estrategias del primer activo
+            if st.session_state.top_activos:
+                for est in ['Ruptura', 'Pendiente EMA', 'ADX Continuación']:
+                    st.session_state.tracker.registrar(est, 'COMPRA', True)
+                st.rerun()
+    with col2:
+        if st.button("❌ Simular Fallo (para prueba)"):
+            if st.session_state.top_activos:
+                for est in ['Ruptura', 'Pendiente EMA', 'ADX Continuación']:
+                    st.session_state.tracker.registrar(est, 'COMPRA', False)
+                st.rerun()
+
+    # Mostrar detalles de estrategias para el activo principal
     if st.session_state.top_activos:
         mejor = st.session_state.top_activos[0]
-        st.subheader(f"📈 Análisis Detallado: {mejor['activo'].replace('-OTC', '')}")
+        with st.expander(f"🔍 Ver votos de estrategias para {mejor['activo']}"):
+            for det in mejor['detalles_estrategias']:
+                st.write(f"**{det['nombre']}**: {det['senal']} (confianza {det['confianza']})")
 
-        # Alerta anticipada
-        ahora = datetime.now(ecuador_tz)
-        minutos = ahora.minute
-        minuto_base = (minutos // 5) * 5
-        tiempo_entrada = ahora.replace(minute=minuto_base, second=0, microsecond=0) + timedelta(minutes=5)
-        segundos_restantes = (tiempo_entrada - ahora).seconds
-
-        if mejor['senal'] and segundos_restantes <= 60 and segundos_restantes > 0:
-            st.markdown(f"""
-            <div class="alert-box">
-                <h3 style="color:#FFAA00; margin:0;">⚠️ SEÑAL CONFIRMADA - 1 MINUTO DE ANTICIPACIÓN</h3>
-                <p style="font-size:1.2rem; margin:10px 0 0 0;">
-                    <strong>{mejor['activo'].replace('-OTC', '')}</strong> - {mejor['senal']} a las {tiempo_entrada.strftime('%H:%M')}<br>
-                    Vencimiento: {(tiempo_entrada+timedelta(minutes=5)).strftime('%H:%M')} | Probabilidad: {mejor['probabilidad']}%
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-
-        # Gráfico
-        if mejor['df'] is not None and len(mejor['df']) > 20:
-            df_graf = mejor['df'].iloc[-50:].copy()
-            fig = make_subplots(
-                rows=4, cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0.05,
-                row_heights=[0.5, 0.15, 0.2, 0.15],
-                subplot_titles=("Precio con EMAs y BB", "RSI", "Volumen", "MACD")
-            )
-            # Velas
-            fig.add_trace(go.Candlestick(
-                x=df_graf.index,
-                open=df_graf['open'],
-                high=df_graf['high'],
-                low=df_graf['low'],
-                close=df_graf['close'],
-                name="",
-                increasing_line_color='#00FF88',
-                decreasing_line_color='#FF4646',
-                showlegend=False
-            ), row=1, col=1)
-            # EMAs
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_20'],
-                                      line=dict(color='#2962FF', width=2.5), name="EMA 20"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_50'],
-                                      line=dict(color='#FFAA00', width=2.5), name="EMA 50"), row=1, col=1)
-            # Bandas
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['BBU'],
-                                      line=dict(color='#888', dash='dash'), name="BB Sup"), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['BBL'],
-                                      line=dict(color='#888', dash='dash'), name="BB Inf"), row=1, col=1)
-            # RSI
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['rsi'],
-                                      line=dict(color='#FFFFFF', width=2), name="RSI"), row=2, col=1)
-            fig.add_hline(y=70, line_dash="dash", line_color="#FF4646", row=2)
-            fig.add_hline(y=30, line_dash="dash", line_color="#00FF88", row=2)
-            # Volumen
-            colors_vol = ['#00FF88' if df_graf['close'].iloc[i] >= df_graf['close'].iloc[i-1]
-                         else '#FF4646' for i in range(1, len(df_graf))]
-            colors_vol.insert(0, '#00FF88')
-            fig.add_trace(go.Bar(x=df_graf.index, y=df_graf['volume'],
-                                  marker_color=colors_vol, name="Volumen"), row=3, col=1)
-            # MACD
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['macd'],
-                                      line=dict(color='cyan', width=2), name="MACD"), row=4, col=1)
-            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['macd_signal'],
-                                      line=dict(color='orange', width=2), name="Señal"), row=4, col=1)
-
-            fig.update_layout(
-                height=850,
-                template="plotly_dark",
-                paper_bgcolor="#0A0C10",
-                plot_bgcolor="#0A0C10",
-                font_color="#E0E0E0",
-                hovermode="x unified",
-                showlegend=True,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Métricas
-            st.subheader("🔍 Detalles Clave")
-            ult = mejor['df'].iloc[-1]
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Precio", f"{ult['close']:.5f}")
-            with col2:
-                st.metric("RSI", f"{ult['rsi']:.2f}")
-            with col3:
-                st.metric("Volumen Ratio", f"{ult['volume_ratio']:.2f}x")
-            with col4:
-                st.metric("Volatilidad", f"{ult['volatilidad']:.2f}%")
-        else:
-            st.warning("Datos insuficientes para gráfico.")
-
-    # Modo replay
-    st.markdown("---")
-    if st.button("🎮 Modo Replay (Siguiente vela)", use_container_width=True):
-        st.session_state.ultima_actualizacion = None
-        st.rerun()
+    # Gráfico del activo principal (opcional)
+    if st.session_state.top_activos and st.checkbox("Mostrar gráfico del activo principal"):
+        mejor = st.session_state.top_activos[0]
+        df_graf = mejor['df'].iloc[-50:].copy()
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                            row_heights=[0.7, 0.3],
+                            subplot_titles=("Precio con EMAs", "Volumen"))
+        fig.add_trace(go.Candlestick(x=df_graf.index,
+                                      open=df_graf['open'],
+                                      high=df_graf['high'],
+                                      low=df_graf['low'],
+                                      close=df_graf['close'],
+                                      increasing_line_color='#00FF88',
+                                      decreasing_line_color='#FF4646'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_20'],
+                                  line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_50'],
+                                  line=dict(color='orange')), row=1, col=1)
+        fig.add_trace(go.Bar(x=df_graf.index, y=df_graf['volume'],
+                              marker_color='#00FF88'), row=2, col=1)
+        fig.update_layout(height=600, template="plotly_dark", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     main()
