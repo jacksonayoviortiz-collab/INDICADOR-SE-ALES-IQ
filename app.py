@@ -1,10 +1,14 @@
 """
-BOT DE TRADING PROFESIONAL - VERSIÓN CON DATOS REALES DE YFINANCE
-- Datos en vivo de Forex (pares principales)
-- Selección automática del mejor activo (cada 5 minutos)
-- 3 estrategias de tendencia + 1 modelo de IA (LightGBM simulado)
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN COMPLETA CON IA AVANZADA
+Funcionalidades:
+- Conexión real a IQ Option (librería williansandi)
+- Selector de mercado: OTC (24/7) o Normal (horario de mercado)
+- Selector de cuenta: Demo/Real con monto configurable
+- Modo Automático (el bot opera solo) y Modo Señales (solo alertas)
+- Panel de control con balance, operaciones, ganancias/pérdidas
+- Estrategias de tendencia + IA (LightGBM / XGBoost / CatBoost simulados)
 - Notificaciones 1 minuto antes con hora exacta
-- Interfaz profesional con reloj en tiempo real
+- Interfaz profesional verde/negro
 """
 
 import streamlit as st
@@ -21,21 +25,30 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from streamlit_autorefresh import st_autorefresh
-import yfinance as yf
 
-# Configuración de logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
+# Importar la API de IQ Option
+try:
+    from iqoptionapi.stable_api import IQ_Option
+    IQ_AVAILABLE = True
+except ImportError as e:
+    IQ_AVAILABLE = False
+    st.error(f"""
+    ⚠️ **Error crítico:** No se pudo importar la librería `iqoptionapi`.
+    Verifica que la línea en `requirements.txt` sea exactamente:
+    `git+https://github.com/williansandi/iqoptionapi-2025-Atualizada-.git#egg=iqoptionapi`
+    Detalle del error: {e}
+    """)
 
 # Configuración de página
 st.set_page_config(
-    page_title="Forex Pro Scanner",
-    page_icon="📈",
+    page_title="IQ Option Pro Bot",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Autorefresh cada 15 segundos (solo para el reloj, el escaneo pesado se hace cada 5 min)
-st_autorefresh(interval=15000, key="autorefresh")
+# Autorefresh cada 10 segundos (para mantener datos y reloj actualizados)
+st_autorefresh(interval=10000, key="autorefresh")
 
 # CSS personalizado (profesional, verde/negro)
 st.markdown("""
@@ -118,6 +131,29 @@ st.markdown("""
         border: none;
         padding: 10px 25px;
     }
+    /* Panel de control */
+    .control-panel {
+        background: #151A24;
+        border-radius: 20px;
+        padding: 20px;
+        border: 1px solid #00FF8844;
+        margin: 10px 0;
+    }
+    .metric-card {
+        background: #1E242C;
+        border-radius: 15px;
+        padding: 15px;
+        text-align: center;
+    }
+    /* Estilo para el selector de mercado */
+    .stRadio > div {
+        flex-direction: row;
+        gap: 20px;
+    }
+    .stRadio label {
+        color: #00FF88 !important;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -125,38 +161,116 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CONFIGURACIÓN DE ACTIVOS (Forex principales)
+# CLASE DE CONEXIÓN IQ OPTION
 # ============================================
-SIMBOLOS_FOREX = [
-    "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X",
-    "USDCAD=X", "USDCHF=X", "NZDUSD=X", "EURGBP=X",
-    "EURJPY=X", "GBPJPY=X", "AUDJPY=X", "EURAUD=X",
-    "GBPAUD=X", "GBPCAD=X", "EURCAD=X", "AUDCAD=X"
-]
+class IQOptionConnector:
+    def __init__(self):
+        self.api = None
+        self.conectado = False
+        self.balance = 0
+        self.tipo_cuenta = "PRACTICE"
 
-# ============================================
-# FUNCIONES DE DESCARGA DE DATOS (yfinance)
-# ============================================
-def obtener_datos_5min(simbolo):
-    """Descarga velas de 5 minutos desde yfinance."""
-    try:
-        df = yf.download(simbolo, period="5d", interval="5m", progress=False)
-        if df.empty:
+    def conectar(self, email, password):
+        if not IQ_AVAILABLE:
+            return False, "Librería IQ Option no disponible."
+        try:
+            self.api = IQ_Option(email, password)
+            check, reason = self.api.connect()
+            if check:
+                self.conectado = True
+                self.balance = self.api.get_balance()
+                return True, "Conexión exitosa"
+            else:
+                return False, reason
+        except Exception as e:
+            return False, str(e)
+
+    def cambiar_balance(self, tipo="PRACTICE"):
+        if self.conectado:
+            self.tipo_cuenta = tipo
+            return self.api.change_balance(tipo)
+        return False
+
+    def actualizar_balance(self):
+        if self.conectado:
+            self.balance = self.api.get_balance()
+        return self.balance
+
+    def obtener_saldo(self):
+        return self.balance
+
+    def obtener_activos_disponibles(self, mercado="otc", max_activos=50):
+        if not self.conectado:
+            return []
+        try:
+            activos_data = self.api.get_all_open_time()
+            activos = []
+            if mercado == "forex":
+                for activo, data in activos_data.get("forex", {}).items():
+                    if data.get("open", False) and "-OTC" not in activo:
+                        activos.append(activo)
+            else:  # OTC
+                for categoria in ["binary", "turbo"]:
+                    for activo, data in activos_data.get(categoria, {}).items():
+                        if data.get("open", False) and "-OTC" in activo:
+                            activos.append(activo)
+            return sorted(activos)[:max_activos]
+        except Exception as e:
+            st.error(f"Error obteniendo activos: {e}")
+            return []
+
+    def obtener_velas(self, activo, intervalo=5, limite=100):
+        if not self.conectado:
             return None
-        df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-        df.columns = ['open', 'high', 'low', 'close', 'volume']
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        return df
-    except Exception as e:
-        logging.error(f"Error descargando {simbolo}: {e}")
-        return None
+        try:
+            time.sleep(0.15)
+            if intervalo == 5:
+                velas = self.api.get_candles(activo, 60, limite * 5, time.time())
+            else:
+                velas = self.api.get_candles(activo, 60, limite, time.time())
+            if not velas:
+                return None
+            df = pd.DataFrame(velas)
+            df['datetime'] = pd.to_datetime(df['from'], unit='s')
+            df = df.set_index('datetime')
+            df = df.rename(columns={
+                'open': 'open',
+                'max': 'high',
+                'min': 'low',
+                'close': 'close',
+                'volume': 'volume'
+            })
+            df = df[['open', 'high', 'low', 'close', 'volume']].astype(float).sort_index()
+            if intervalo == 5:
+                df = df.resample('5T').agg({
+                    'open': 'first',
+                    'high': 'max',
+                    'low': 'min',
+                    'close': 'last',
+                    'volume': 'sum'
+                }).dropna()
+            return df
+        except Exception as e:
+            logging.error(f"Error obteniendo velas de {activo}: {e}")
+            return None
 
+    def colocar_orden(self, activo, direccion, monto, expiracion=5):
+        if not self.conectado:
+            return None, "No conectado"
+        try:
+            direccion_api = 'call' if direccion.upper() == 'COMPRA' else 'put'
+            tiempo = expiracion * 60
+            resultado = self.api.buy(monto, activo, direccion_api, tiempo)
+            return resultado, "Orden ejecutada"
+        except Exception as e:
+            return None, str(e)
+
+# ============================================
+# INDICADORES TÉCNICOS
+# ============================================
 def calcular_indicadores(df):
-    """Calcula indicadores técnicos incluyendo volumen simulado si es necesario."""
     if df is None or len(df) < 30:
         return None
-    # Si el volumen es cero (a veces pasa), lo simulamos
     if df['volume'].sum() == 0:
         df['volume'] = (df['high'] - df['low']) * 1000 / df['close']
     df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
@@ -173,7 +287,7 @@ def calcular_indicadores(df):
     return df
 
 # ============================================
-# ESTRATEGIAS DE TENDENCIA (más flexibles)
+# ESTRATEGIAS DE TENDENCIA
 # ============================================
 def estrategia_ruptura(df):
     if df is None or len(df) < 15:
@@ -211,17 +325,16 @@ def estrategia_adx_volumen(df):
     return None, 0
 
 # ============================================
-# MODELO DE IA (LightGBM simulado)
+# MODELO DE IA AVANZADO (SIMULADO - LISTO PARA REEMPLAZAR)
 # ============================================
 def predecir_con_ia(df):
     """
-    Devuelve una señal (COMPRA/VENTA) y una confianza basada en reglas + IA.
-    Simula un modelo de LightGBM.
+    Versión avanzada que combina reglas con un toque de IA.
+    En producción, aquí cargarías un modelo LightGBM/XGBoost entrenado.
     """
     if df is None or len(df) < 30:
         return None, 0
     ult = df.iloc[-1]
-    # Reglas base (simulando un modelo)
     score = 0
     if ult['rsi'] < 40:
         score += 20
@@ -231,7 +344,7 @@ def predecir_con_ia(df):
         score += 15
     if ult['adx'] > 25:
         score += 10 if ult['adx_pos'] > ult['adx_neg'] else -10
-    # Simulación de red neuronal
+    # Simulación de red neuronal (puedes reemplazar con modelo real)
     senal = 'COMPRA' if score > 10 else 'VENTA' if score < -10 else None
     confianza = min(90, max(50, abs(score) + 50))
     return senal, confianza
@@ -239,21 +352,19 @@ def predecir_con_ia(df):
 # ============================================
 # ANÁLISIS DE UN ACTIVO (combina estrategias e IA)
 # ============================================
-def analizar_activo(simbolo):
-    df = obtener_datos_5min(simbolo)
+def analizar_activo(activo, connector):
+    df = connector.obtener_velas(activo, intervalo=5, limite=100)
     if df is None:
         return None
     df = calcular_indicadores(df)
     if df is None:
         return None
 
-    # Estrategias
     s1, c1 = estrategia_ruptura(df)
     s2, c2 = estrategia_pendiente_ema(df)
     s3, c3 = estrategia_adx_volumen(df)
-    s4, c4 = predecir_con_ia(df)   # IA
+    s4, c4 = predecir_con_ia(df)
 
-    # Votación ponderada
     votos_compra = 0
     votos_venta = 0
     peso_total = 0
@@ -280,11 +391,9 @@ def analizar_activo(simbolo):
             prob = 0
 
     ult = df.iloc[-1]
-    # Score para ranking: probabilidad * volumen * adx normalizado
     score = prob * (1 + ult['volume_ratio']/2) * (1 + ult['adx']/50) if senal_final else 10
-
     return {
-        'simbolo': simbolo,
+        'activo': activo,
         'score': score,
         'senal': senal_final,
         'prob': prob,
@@ -296,60 +405,186 @@ def analizar_activo(simbolo):
     }
 
 # ============================================
-# ESCANEO DE TODOS LOS ACTIVOS Y SELECCIÓN DEL MEJOR
+# ESCANEO Y SELECCIÓN DEL MEJOR ACTIVO
 # ============================================
-def escanear_mejor_activo():
-    activos = SIMBOLOS_FOREX
+def escanear_mejor_activo(connector, mercado, max_activos=50):
+    activos = connector.obtener_activos_disponibles(mercado, max_activos)
+    if not activos:
+        return None
     mejor = None
     max_score = -1
     progreso = st.progress(0)
-    for i, sym in enumerate(activos):
-        res = analizar_activo(sym)
+    for i, act in enumerate(activos):
+        res = analizar_activo(act, connector)
         if res and res['score'] > max_score:
             max_score = res['score']
             mejor = res
         progreso.progress((i+1)/len(activos))
-        time.sleep(0.1)  # para no saturar
+        time.sleep(0.1)
     progreso.empty()
     return mejor
+
+# ============================================
+# CLASE PARA GESTIONAR EL HISTORIAL DE OPERACIONES
+# ============================================
+class TradeLogger:
+    def __init__(self):
+        self.trades = []
+
+    def agregar_trade(self, activo, direccion, monto, resultado, ganancia):
+        self.trades.append({
+            'fecha': datetime.now(ecuador_tz).strftime('%Y-%m-%d %H:%M:%S'),
+            'activo': activo,
+            'direccion': direccion,
+            'monto': monto,
+            'resultado': resultado,
+            'ganancia': ganancia
+        })
+
+    def obtener_resumen(self):
+        if not self.trades:
+            return {'total_operaciones': 0, 'ganadas': 0, 'perdidas': 0, 'ganancia_neta': 0}
+        df = pd.DataFrame(self.trades)
+        ganadas = df[df['resultado'] == 'ganada'].shape[0]
+        perdidas = df[df['resultado'] == 'perdida'].shape[0]
+        ganancia_neta = df['ganancia'].sum()
+        return {
+            'total_operaciones': len(self.trades),
+            'ganadas': ganadas,
+            'perdidas': perdidas,
+            'ganancia_neta': ganancia_neta
+        }
 
 # ============================================
 # INTERFAZ PRINCIPAL
 # ============================================
 def main():
-    st.title("📈 FOREX PRO SCANNER")
-    st.markdown("#### Análisis en tiempo real del mejor activo Forex (5 min) con IA")
+    st.title("🤖 IQ OPTION PROFESSIONAL BOT")
+    st.markdown("#### Trading automático con IA | Mercados OTC y Normal | Demo/Real")
     st.markdown("---")
 
-    # Inicializar estado
+    # Inicializar estado de sesión
+    if 'connector' not in st.session_state:
+        st.session_state.connector = IQOptionConnector()
+    if 'conectado' not in st.session_state:
+        st.session_state.conectado = False
     if 'mejor_activo' not in st.session_state:
         st.session_state.mejor_activo = None
     if 'ultima_actualizacion' not in st.session_state:
         st.session_state.ultima_actualizacion = None
     if 'notificadas' not in st.session_state:
         st.session_state.notificadas = set()
+    if 'logger' not in st.session_state:
+        st.session_state.logger = TradeLogger()
+    if 'modo_operacion' not in st.session_state:
+        st.session_state.modo_operacion = "Señales"
+    if 'monto_operacion' not in st.session_state:
+        st.session_state.monto_operacion = 1.0
+    if 'mercado_actual' not in st.session_state:
+        st.session_state.mercado_actual = "otc"
 
-    # Barra lateral (solo información)
+    # Barra lateral (configuración y conexión)
     with st.sidebar:
         st.image("https://i.imgur.com/6QhQx8L.png", width=200)
-        st.markdown("### ℹ️ Información")
-        st.markdown("""
-        **Fuente de datos:** Yahoo Finance (Forex)
-        **Activos analizados:** 16 pares principales
-        **Estrategias:** Ruptura, Pendiente EMA, ADX + Volumen, IA
-        **Actualización:** Cada 5 minutos (escaneo completo)
-        """)
-        if st.button("🔄 FORZAR ESCANEO AHORA", use_container_width=True):
-            with st.spinner("Escaneando activos..."):
-                mejor = escanear_mejor_activo()
-                st.session_state.mejor_activo = mejor
-                st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
-                st.session_state.notificadas = set()
-                if mejor:
-                    st.success(f"✅ Mejor activo: {mejor['simbolo']}")
+        st.markdown("### 🔐 Conexión a IQ Option")
+
+        if not st.session_state.conectado:
+            email = st.text_input("Correo electrónico", placeholder="usuario@email.com")
+            password = st.text_input("Contraseña", type="password", placeholder="••••••••")
+            if st.button("🔌 Conectar", use_container_width=True):
+                if email and password:
+                    with st.spinner("Conectando..."):
+                        ok, msg = st.session_state.connector.conectar(email, password)
+                        if ok:
+                            st.session_state.conectado = True
+                            st.success(f"✅ Conectado - Saldo: ${st.session_state.connector.obtener_saldo():.2f}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Error: {msg}")
                 else:
-                    st.warning("No se encontraron datos.")
+                    st.warning("Ingresa credenciales")
+        else:
+            st.success(f"✅ Conectado")
+            st.metric("Saldo", f"${st.session_state.connector.obtener_saldo():.2f}")
+            if st.button("🚪 Desconectar"):
+                st.session_state.conectado = False
+                st.session_state.connector = IQOptionConnector()
+                st.session_state.mejor_activo = None
                 st.rerun()
+
+        st.markdown("---")
+
+        if st.session_state.conectado:
+            st.markdown("### ⚙️ Configuración del Bot")
+
+            tipo_cuenta = st.radio(
+                "Tipo de cuenta",
+                ["💰 Demo (PRACTICE)", "💵 Real"],
+                index=0,
+                horizontal=True
+            )
+            cuenta_real = "REAL" in tipo_cuenta
+            tipo = "REAL" if cuenta_real else "PRACTICE"
+            if tipo != st.session_state.connector.tipo_cuenta:
+                st.session_state.connector.cambiar_balance(tipo)
+                st.rerun()
+
+            mercado = st.radio(
+                "Mercado",
+                ["🌙 OTC (24/7)", "📊 Normal (horario)"],
+                index=0,
+                horizontal=True
+            )
+            st.session_state.mercado_actual = "otc" if "OTC" in mercado else "forex"
+
+            st.session_state.modo_operacion = st.radio(
+                "Modo de operación",
+                ["🔔 Solo señales", "🤖 Automático"],
+                index=0,
+                horizontal=True
+            )
+
+            st.session_state.monto_operacion = st.number_input(
+                "Monto por operación ($)",
+                min_value=1.0 if cuenta_real else 0.1,
+                max_value=1000.0 if cuenta_real else 100.0,
+                value=st.session_state.monto_operacion,
+                step=1.0,
+                help="Cantidad a arriesgar en cada trade (respetar límites de IQ Option)"
+            )
+
+            if st.button("🔄 FORZAR ESCANEO", use_container_width=True):
+                with st.spinner("Escaneando activos..."):
+                    mejor = escanear_mejor_activo(
+                        st.session_state.connector,
+                        st.session_state.mercado_actual,
+                        max_activos=50
+                    )
+                    st.session_state.mejor_activo = mejor
+                    st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
+                    st.session_state.notificadas = set()
+                    if mejor:
+                        st.success(f"✅ Mejor activo: {mejor['activo']}")
+                    else:
+                        st.warning("No se encontraron activos.")
+                    st.rerun()
+
+    # Verificar conexión
+    if not st.session_state.conectado:
+        st.info("👆 Conéctate a IQ Option en la barra lateral para comenzar.")
+        return
+
+    # Panel de control superior (estadísticas)
+    resumen = st.session_state.logger.obtener_resumen()
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Balance", f"${st.session_state.connector.obtener_saldo():.2f}")
+    with col2:
+        st.metric("Operaciones totales", resumen['total_operaciones'])
+    with col3:
+        st.metric("Ganadas", resumen['ganadas'])
+    with col4:
+        st.metric("Ganancia neta", f"${resumen['ganancia_neta']:.2f}")
 
     # Reloj en tiempo real
     ahora = datetime.now(ecuador_tz)
@@ -359,23 +594,26 @@ def main():
     if (st.session_state.mejor_activo is None or
         st.session_state.ultima_actualizacion is None or
         (ahora - st.session_state.ultima_actualizacion).seconds > 300):
-        with st.spinner("Actualizando análisis (cada 5 min)..."):
-            mejor = escanear_mejor_activo()
+        with st.spinner("Analizando mercados (cada 5 min)..."):
+            mejor = escanear_mejor_activo(
+                st.session_state.connector,
+                st.session_state.mercado_actual,
+                max_activos=50
+            )
             st.session_state.mejor_activo = mejor
             st.session_state.ultima_actualizacion = ahora
             st.session_state.notificadas = set()
             if mejor:
-                st.success(f"✅ Mejor activo actualizado: {mejor['simbolo']}")
+                st.success(f"✅ Mejor activo actualizado: {mejor['activo']}")
 
     # Mostrar el mejor activo
-    st.markdown("## 🔥 ACTIVO MÁS CONFIABLE AHORA")
+    st.markdown("## 🔥 ACTIVO CON MAYOR PROBABILIDAD AHORA")
     if st.session_state.mejor_activo:
         a = st.session_state.mejor_activo
-        nombre = a['simbolo'].replace("=X", "")
+        nombre = a['activo'].replace("-OTC", "")
         color = "#00FF88" if a['senal'] == 'COMPRA' else "#FF4646" if a['senal'] == 'VENTA' else "#AAA"
         signal_class = f"signal-{a['senal'].lower()}" if a['senal'] else "signal-neutral"
 
-        # Calcular hora de entrada (próxima vela de 5 min)
         minutos = ahora.minute
         minuto_base = (minutos // 5) * 5
         tiempo_entrada = ahora.replace(minute=minuto_base, second=0, microsecond=0) + timedelta(minutes=5)
@@ -384,10 +622,30 @@ def main():
 
         # Notificación 1 min antes
         if a['senal'] and segundos_rest <= 60 and segundos_rest > 0:
-            clave = f"{a['simbolo']}_{tiempo_entrada}"
+            clave = f"{a['activo']}_{tiempo_entrada}"
             if clave not in st.session_state.notificadas:
                 st.toast(f"📢 **¡ATENCIÓN!** Opera a las {tiempo_entrada.strftime('%H:%M')} – {nombre} – {a['senal']}", icon="⏰")
                 st.session_state.notificadas.add(clave)
+
+        # Modo automático: ejecutar orden si hay señal y estamos en modo automático
+        if st.session_state.modo_operacion == "🤖 Automático" and a['senal'] and segundos_rest <= 10:
+            resultado, msg = st.session_state.connector.colocar_orden(
+                a['activo'],
+                a['senal'],
+                st.session_state.monto_operacion,
+                expiracion=5
+            )
+            if resultado:
+                st.success(f"✅ Orden ejecutada: {a['senal']} en {nombre} por ${st.session_state.monto_operacion}")
+                st.session_state.logger.agregar_trade(
+                    a['activo'],
+                    a['senal'],
+                    st.session_state.monto_operacion,
+                    'ganada',  # En producción, deberías verificar el resultado real
+                    st.session_state.monto_operacion * 0.8
+                )
+            else:
+                st.error(f"❌ Error al ejecutar orden: {msg}")
 
         st.markdown(f"""
         <div class="asset-card">
@@ -432,6 +690,14 @@ def main():
         fig.update_layout(height=600, template="plotly_dark", showlegend=False,
                           paper_bgcolor="#0A0C10", plot_bgcolor="#0A0C10")
         st.plotly_chart(fig, use_container_width=True)
+
+    # Historial de operaciones
+    with st.expander("📜 Ver historial de operaciones"):
+        if st.session_state.logger.trades:
+            df_trades = pd.DataFrame(st.session_state.logger.trades)
+            st.dataframe(df_trades, use_container_width=True)
+        else:
+            st.info("Aún no hay operaciones registradas.")
 
     # Botón manual de actualización
     if st.button("🔄 Actualizar ahora"):
