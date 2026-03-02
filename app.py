@@ -1,12 +1,12 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN TIEMPO REAL
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN SIMPLIFICADA
 Características:
 - Actualización automática cada 10 segundos (autorefresh)
 - Reloj en tiempo real
-- 2 paneles: 1 activo de 5 min y 1 activo de 1 min (los más confiables)
-- Escaneo completo de activos en cada ciclo
+- 1 panel: activo más confiable con vencimiento de 5 minutos
+- Escaneo completo de activos OTC o Normal según selección
 - Estrategias robustas con volumen simulado si es necesario
-- Notificaciones con 1 min de anticipación para 5 min y "Opera ahora" para 1 min
+- Notificación 1 minuto antes de la operación
 """
 
 import streamlit as st
@@ -41,16 +41,16 @@ except ImportError:
 
 # Configuración de página
 st.set_page_config(
-    page_title="IQ Option Real-Time Scanner",
+    page_title="IQ Option Scanner 5min",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Autorefresh cada 10 segundos (para mantener reloj y datos actualizados)
+# Autorefresh cada 10 segundos
 count = st_autorefresh(interval=10000, key="autorefresh")
 
-# CSS personalizado (simplificado y profesional)
+# CSS personalizado
 st.markdown("""
 <style>
     .stApp {
@@ -65,24 +65,24 @@ st.markdown("""
     .asset-card {
         background: rgba(18, 22, 30, 0.9);
         border-radius: 28px;
-        padding: 25px;
+        padding: 30px;
         box-shadow: 0 25px 45px -15px rgba(0, 255, 136, 0.3);
         border: 1px solid #00FF8844;
-        margin: 10px 0;
+        margin: 20px 0;
     }
     .asset-name {
-        font-size: 24px;
+        font-size: 28px;
         font-weight: 700;
         color: #FFFFFF;
-        margin-bottom: 10px;
+        margin-bottom: 15px;
     }
     .asset-signal {
-        font-size: 20px;
+        font-size: 24px;
         font-weight: 700;
-        padding: 12px;
-        border-radius: 40px;
+        padding: 15px;
+        border-radius: 50px;
         text-align: center;
-        margin: 15px 0;
+        margin: 20px 0;
     }
     .signal-compra {
         background: rgba(0, 255, 136, 0.2);
@@ -95,12 +95,12 @@ st.markdown("""
         border: 2px solid #FF4646;
     }
     .asset-footer {
-        font-size: 16px;
+        font-size: 18px;
         color: #AAA;
         display: flex;
         justify-content: space-between;
-        margin-top: 15px;
-        padding-top: 15px;
+        margin-top: 20px;
+        padding-top: 20px;
         border-top: 1px solid #333;
     }
     .reloj {
@@ -119,16 +119,7 @@ st.markdown("""
         color: black;
         padding: 5px 15px;
         border-radius: 30px;
-        font-size: 14px;
-        font-weight: 600;
-        margin-left: 10px;
-    }
-    .badge-1min {
-        background: #FFAA00;
-        color: black;
-        padding: 5px 15px;
-        border-radius: 30px;
-        font-size: 14px;
+        font-size: 16px;
         font-weight: 600;
         margin-left: 10px;
     }
@@ -139,6 +130,13 @@ st.markdown("""
         border-radius: 40px;
         border: none;
         padding: 10px 25px;
+    }
+    .metric-box {
+        background: #151A24;
+        border-radius: 20px;
+        padding: 10px;
+        text-align: center;
+        border: 1px solid #00FF8844;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -201,10 +199,7 @@ class IQOptionConnector:
             return None
         try:
             time.sleep(0.15)
-            if intervalo == 5:
-                velas = self.api.get_candles(activo, 60, limite * 5, time.time())
-            else:
-                velas = self.api.get_candles(activo, 60, limite, time.time())
+            velas = self.api.get_candles(activo, 60, limite * 5, time.time())
             if not velas:
                 return None
             df = pd.DataFrame(velas)
@@ -218,14 +213,14 @@ class IQOptionConnector:
                 'volume': 'volume'
             })
             df = df[['open', 'high', 'low', 'close', 'volume']].astype(float).sort_index()
-            if intervalo == 5:
-                df = df.resample('5T').agg({
-                    'open': 'first',
-                    'high': 'max',
-                    'low': 'min',
-                    'close': 'last',
-                    'volume': 'sum'
-                }).dropna()
+            # Si el intervalo es 5, ya vienen de 5 minutos? No, vienen de 1 minuto, así que resampleamos
+            df = df.resample('5T').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
             return df
         except Exception as e:
             logging.error(f"Error obteniendo velas de {activo}: {e}")
@@ -299,29 +294,6 @@ def estrategia_adx_5min(df):
             return 'VENTA', 70
     return None, 0
 
-# === ESTRATEGIAS PARA 1 MINUTO ===
-def estrategia_ruptura_1min(df):
-    if df is None or len(df) < 10:
-        return None, 0
-    ult = df.iloc[-1]
-    max_reciente = df['high'].iloc[-5:-1].max()
-    min_reciente = df['low'].iloc[-5:-1].max()
-    if ult['close'] > max_reciente and ult['volume_ratio'] > 1.3:
-        return 'COMPRA', 75
-    elif ult['close'] < min_reciente and ult['volume_ratio'] > 1.3:
-        return 'VENTA', 75
-    return None, 0
-
-def estrategia_rsi_1min(df):
-    if df is None or len(df) < 14:
-        return None, 0
-    ult = df.iloc[-1]
-    if ult['rsi'] < 30 and ult['volume_ratio'] > 1.2:
-        return 'COMPRA', 70
-    elif ult['rsi'] > 70 and ult['volume_ratio'] > 1.2:
-        return 'VENTA', 70
-    return None, 0
-
 # === ANÁLISIS DE UN ACTIVO PARA 5 MIN ===
 def analizar_5min(activo, connector):
     df = connector.obtener_velas(activo, intervalo=5, limite=100)
@@ -377,86 +349,24 @@ def analizar_5min(activo, connector):
         'df': df
     }
 
-# === ANÁLISIS PARA 1 MIN ===
-def analizar_1min(activo, connector):
-    df = connector.obtener_velas(activo, intervalo=1, limite=100)
-    if df is None:
-        return None
-    # Calcular solo lo necesario
-    if df['volume'].sum() == 0:
-        df['volume'] = (df['high'] - df['low']) * 1000 / df['close']
-    df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-    df['volume_ma'] = df['volume'].rolling(20).mean()
-    df['volume_ratio'] = df['volume'] / df['volume_ma'].clip(lower=1)
-    if len(df) < 10:
-        return None
-
-    senal1, conf1 = estrategia_ruptura_1min(df)
-    senal2, conf2 = estrategia_rsi_1min(df)
-
-    votos_compra = 0
-    votos_venta = 0
-    peso_total = 0
-    if senal1 == 'COMPRA':
-        votos_compra += conf1
-        peso_total += conf1
-    elif senal1 == 'VENTA':
-        votos_venta += conf1
-        peso_total += conf1
-    if senal2 == 'COMPRA':
-        votos_compra += conf2
-        peso_total += conf2
-    elif senal2 == 'VENTA':
-        votos_venta += conf2
-        peso_total += conf2
-
-    if peso_total == 0:
-        senal_final = None
-        prob = 0
-    else:
-        if votos_compra > votos_venta:
-            prob = int((votos_compra / peso_total) * 100)
-            senal_final = 'COMPRA'
-        elif votos_venta > votos_compra:
-            prob = int((votos_venta / peso_total) * 100)
-            senal_final = 'VENTA'
-        else:
-            senal_final = None
-            prob = 0
-
-    ult = df.iloc[-1]
-    score = prob * (1 + ult['volume_ratio']) * (1 + (100 - ult['rsi'])/100) if senal_final else 0
-    return {
-        'activo': activo,
-        'score': score,
-        'senal': senal_final,
-        'prob': prob,
-        'precio': ult['close'],
-        'rsi': ult['rsi'],
-        'volume_ratio': ult['volume_ratio'],
-        'df': df
-    }
-
-# === ESCANEO COMPLETO (se ejecuta en cada autorefresh) ===
+# === ESCANEO COMPLETO ===
 def escanear(connector, mercado, max_activos=50):
     activos = connector.obtener_activos_disponibles(mercado, max_activos)
     if not activos:
-        return None, None
-    mejores_5min = None
-    mejores_1min = None
-    max_score_5 = -1
-    max_score_1 = -1
-    for act in activos:
-        time.sleep(0.1)  # para no saturar
-        res5 = analizar_5min(act, connector)
-        if res5 and res5['score'] > max_score_5:
-            max_score_5 = res5['score']
-            mejores_5min = res5
-        res1 = analizar_1min(act, connector)
-        if res1 and res1['score'] > max_score_1:
-            max_score_1 = res1['score']
-            mejores_1min = res1
-    return mejores_5min, mejores_1min
+        return None
+    mejor = None
+    max_score = -1
+    total = len(activos)
+    progreso = st.progress(0)
+    for i, act in enumerate(activos):
+        time.sleep(0.1)
+        res = analizar_5min(act, connector)
+        if res and res['score'] > max_score:
+            max_score = res['score']
+            mejor = res
+        progreso.progress((i+1)/total)
+    progreso.empty()
+    return mejor
 
 # === INTERFAZ PRINCIPAL ===
 def main():
@@ -465,16 +375,12 @@ def main():
         st.session_state.connector = IQOptionConnector()
     if 'conectado' not in st.session_state:
         st.session_state.conectado = False
-    if 'mejor_5min' not in st.session_state:
-        st.session_state.mejor_5min = None
-    if 'mejor_1min' not in st.session_state:
-        st.session_state.mejor_1min = None
+    if 'mejor_activo' not in st.session_state:
+        st.session_state.mejor_activo = None
     if 'mercado_actual' not in st.session_state:
         st.session_state.mercado_actual = "otc"
-    if 'notificadas_5min' not in st.session_state:
-        st.session_state.notificadas_5min = set()
-    if 'notificadas_1min' not in st.session_state:
-        st.session_state.notificadas_1min = set()
+    if 'notificadas' not in st.session_state:
+        st.session_state.notificadas = set()
 
     # Barra lateral
     with st.sidebar:
@@ -506,8 +412,7 @@ def main():
             if st.button("🚪 Desconectar"):
                 st.session_state.conectado = False
                 st.session_state.connector = IQOptionConnector()
-                st.session_state.mejor_5min = None
-                st.session_state.mejor_1min = None
+                st.session_state.mejor_activo = None
                 st.rerun()
 
         st.markdown("---")
@@ -522,6 +427,17 @@ def main():
             )
             st.session_state.mercado_actual = "otc" if "OTC" in mercado else "forex"
 
+            if st.button("🔍 ANALIZAR AHORA", use_container_width=True):
+                with st.spinner("Escaneando activos..."):
+                    mejor = escanear(st.session_state.connector, st.session_state.mercado_actual, max_activos=50)
+                    st.session_state.mejor_activo = mejor
+                    st.session_state.notificadas = set()
+                    if mejor:
+                        st.success(f"✅ Activo encontrado: {mejor['activo']}")
+                    else:
+                        st.warning("No se encontró ningún activo con datos suficientes.")
+                    st.rerun()
+
             st.caption("El análisis se actualiza automáticamente cada 10 segundos.")
 
     # Verificar conexión
@@ -533,17 +449,19 @@ def main():
     ahora = datetime.now(ecuador_tz)
     st.markdown(f"<div class='reloj'>⏰ {ahora.strftime('%H:%M:%S')} ECU</div>", unsafe_allow_html=True)
 
-    # Escanear activos (se ejecuta en cada autorefresh)
-    mejor5, mejor1 = escanear(st.session_state.connector, st.session_state.mercado_actual, max_activos=50)
-    if mejor5:
-        st.session_state.mejor_5min = mejor5
-    if mejor1:
-        st.session_state.mejor_1min = mejor1
+    # Escaneo automático (se ejecuta en cada autorefresh)
+    with st.spinner("Analizando mercado..."):
+        mejor = escanear(st.session_state.connector, st.session_state.mercado_actual, max_activos=50)
+        if mejor:
+            st.session_state.mejor_activo = mejor
+        else:
+            st.session_state.mejor_activo = None
 
-    # === ACTIVO DE 5 MINUTOS ===
-    st.markdown("## 📈 Activo más confiable - Vencimiento 5 minutos")
-    if st.session_state.mejor_5min:
-        a = st.session_state.mejor_5min
+    # === ACTIVO MÁS CONFIABLE ===
+    st.markdown("## 🎯 Activo más confiable - Vencimiento 5 minutos")
+
+    if st.session_state.mejor_activo:
+        a = st.session_state.mejor_activo
         nombre = a['activo'].replace("-OTC", "")
         color = "#00FF88" if a['senal'] == 'COMPRA' else "#FF4646" if a['senal'] == 'VENTA' else "#AAA"
         signal_class = f"signal-{a['senal'].lower()}" if a['senal'] else "signal-neutral"
@@ -558,74 +476,51 @@ def main():
         # Notificación 1 min antes
         if a['senal'] and segundos_rest <= 60 and segundos_rest > 0:
             clave = f"{a['activo']}_{tiempo_entrada}"
-            if clave not in st.session_state.notificadas_5min:
-                st.toast(f"📢 **5 min:** Opera a las {tiempo_entrada.strftime('%H:%M')} – {nombre} – {a['senal']}", icon="⏰")
-                st.session_state.notificadas_5min.add(clave)
+            if clave not in st.session_state.notificadas:
+                st.toast(f"📢 **¡ATENCIÓN!** Opera a las {tiempo_entrada.strftime('%H:%M')} – {nombre} – {a['senal']}", icon="⏰")
+                st.session_state.notificadas.add(clave)
 
         st.markdown(f"""
         <div class="asset-card">
-            <div class="asset-name">{nombre} <span class="badge-5min">5 MIN</span></div>
+            <div class="asset-name">
+                {nombre} <span class="badge-5min">5 MIN</span>
+                <span style="float:right; font-size:18px;">Score: {a['score']:.0f}</span>
+            </div>
             <div class="asset-signal {signal_class}">{a['senal'] if a['senal'] else 'NEUTRAL'}</div>
-            <div style="font-size: 32px; font-weight:800; color:{color}; text-align:center;">{a['prob']}%</div>
+            <div style="font-size: 48px; font-weight:800; color:{color}; text-align:center;">{a['prob']}%</div>
             <div class="asset-footer">
                 <span>⏰ Entrada: {tiempo_entrada.strftime('%H:%M')}</span>
                 <span>⏳ Vence: {tiempo_salida.strftime('%H:%M')}</span>
             </div>
-            <div style="display:flex; justify-content:space-between; margin-top:15px; color:#AAA;">
-                <span>Precio: {a['precio']:.5f}</span>
-                <span>RSI: {a['rsi']:.1f}</span>
-                <span>Vol: {a['volume_ratio']:.1f}x</span>
-                <span>ADX: {a['adx']:.1f}</span>
+            <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin-top:20px;">
+                <div class="metric-box">Precio<br><b>{a['precio']:.5f}</b></div>
+                <div class="metric-box">RSI<br><b>{a['rsi']:.1f}</b></div>
+                <div class="metric-box">Volumen<br><b>{a['volume_ratio']:.1f}x</b></div>
+                <div class="metric-box">ADX<br><b>{a['adx']:.1f}</b></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+        # Gráfico opcional
+        if st.checkbox("📉 Mostrar gráfico de velas"):
+            df_graf = a['df'].iloc[-30:].copy()
+            fig = go.Figure(data=[go.Candlestick(x=df_graf.index,
+                                                  open=df_graf['open'],
+                                                  high=df_graf['high'],
+                                                  low=df_graf['low'],
+                                                  close=df_graf['close'],
+                                                  increasing_line_color='#00FF88',
+                                                  decreasing_line_color='#FF4646')])
+            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_20'],
+                                      line=dict(color='blue', width=1), name="EMA 20"))
+            fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_50'],
+                                      line=dict(color='orange', width=1), name="EMA 50"))
+            fig.update_layout(template="plotly_dark", height=500, margin=dict(l=0,r=0,t=30,b=0))
+            st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning("No se encontró ningún activo con datos suficientes para 5 min.")
+        st.warning("No se encontró ningún activo con datos suficientes en este momento.")
 
-    # === ACTIVO DE 1 MINUTO ===
-    st.markdown("## ⚡ Activo más confiable - Vencimiento 1 minuto")
-    if st.session_state.mejor_1min:
-        a = st.session_state.mejor_1min
-        nombre = a['activo'].replace("-OTC", "")
-        color = "#00FF88" if a['senal'] == 'COMPRA' else "#FF4646" if a['senal'] == 'VENTA' else "#AAA"
-        signal_class = f"signal-{a['senal'].lower()}" if a['senal'] else "signal-neutral"
-
-        # Hora de entrada: próximo minuto exacto
-        tiempo_entrada = ahora.replace(second=0, microsecond=0) + timedelta(minutes=1)
-        tiempo_salida = tiempo_entrada + timedelta(minutes=1)
-        segundos_rest = (tiempo_entrada - ahora).seconds
-
-        # Si faltan menos de 10 segundos, mostramos "Opera ahora"
-        if segundos_rest <= 10 and a['senal']:
-            mensaje_entrada = "🔥 ¡OPERA AHORA!"
-            # Notificación
-            clave = f"{a['activo']}_1min_{tiempo_entrada}"
-            if clave not in st.session_state.notificadas_1min:
-                st.toast(f"⚡ **1 min:** ¡Opera ahora! {nombre} – {a['senal']}", icon="🚀")
-                st.session_state.notificadas_1min.add(clave)
-        else:
-            mensaje_entrada = f"⏰ Entrada: {tiempo_entrada.strftime('%H:%M:%S')}"
-
-        st.markdown(f"""
-        <div class="asset-card">
-            <div class="asset-name">{nombre} <span class="badge-1min">1 MIN</span></div>
-            <div class="asset-signal {signal_class}">{a['senal'] if a['senal'] else 'NEUTRAL'}</div>
-            <div style="font-size: 32px; font-weight:800; color:{color}; text-align:center;">{a['prob']}%</div>
-            <div class="asset-footer">
-                <span>{mensaje_entrada}</span>
-                <span>⏳ Vence: {tiempo_salida.strftime('%H:%M:%S')}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; margin-top:15px; color:#AAA;">
-                <span>Precio: {a['precio']:.5f}</span>
-                <span>RSI: {a['rsi']:.1f}</span>
-                <span>Vol: {a['volume_ratio']:.1f}x</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("No se encontró ningún activo con datos suficientes para 1 min.")
-
-    # Botón manual de actualización (por si acaso)
+    # Botón manual de actualización
     if st.button("🔄 Actualizar ahora"):
         st.rerun()
 
