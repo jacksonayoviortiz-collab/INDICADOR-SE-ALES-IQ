@@ -1,12 +1,11 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN DEFINITIVA
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN COMPLETA
 Características:
-- 3 estrategias independientes con acceso a fuerza y volumen
-- Filtro de continuación de tendencia (ADX, volumen, BB)
-- Escaneo completo de activos en cada actualización
-- Ranking inteligente por score compuesto
-- Notificaciones toast con detalles completos
-- Interfaz profesional con glassmorphism y estrellas de fuerza
+- 2 activos con vencimiento 5 minutos (arriba)
+- 1 activo con vencimiento 1 minuto (abajo)
+- Reloj en tiempo real
+- Estrategias ajustadas para generar señales visibles
+- Alertas para 5 min (1 min antes) y para 1 min ("Opera ahora")
 """
 
 import streamlit as st
@@ -44,10 +43,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS personalizado - Tema profesional con glassmorphism
+# CSS personalizado (se mantiene igual, con pequeños ajustes)
 st.markdown("""
 <style>
-    /* Fondo con patrón sutil */
     .stApp {
         background-color: #0A0C10;
         background-image: 
@@ -55,87 +53,59 @@ st.markdown("""
             linear-gradient(90deg, rgba(0, 255, 136, 0.02) 1px, transparent 1px);
         background-size: 40px 40px;
         color: #E0E0E0;
-        font-family: 'Inter', 'Segoe UI', sans-serif;
+        font-family: 'Inter', sans-serif;
     }
-    /* Títulos en verde neón */
     h1, h2, h3 {
         color: #00FF88 !important;
         font-weight: 700 !important;
-        letter-spacing: -0.5px;
-        text-shadow: 0 0 15px rgba(0,255,136,0.3);
     }
     h1 { border-bottom: 2px solid #00FF88; padding-bottom: 10px; }
-    /* Tarjetas de activos */
     .asset-card {
         background: rgba(18, 22, 30, 0.75);
         backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
         border-radius: 28px;
-        padding: 24px 20px;
+        padding: 20px;
         box-shadow: 0 25px 45px -15px rgba(0, 255, 136, 0.25);
         border: 1px solid rgba(0, 255, 136, 0.25);
-        transition: transform 0.3s cubic-bezier(0.2,0.9,0.3,1), box-shadow 0.3s;
+        transition: transform 0.3s;
         height: 100%;
         display: flex;
         flex-direction: column;
-        position: relative;
-        overflow: hidden;
     }
-    .asset-card::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        left: -50%;
-        width: 200%;
-        height: 200%;
-        background: radial-gradient(circle, rgba(0,255,136,0.1) 0%, transparent 70%);
-        opacity: 0;
-        transition: opacity 0.5s;
-        pointer-events: none;
-    }
-    .asset-card:hover::before { opacity: 1; }
     .asset-card:hover {
-        transform: translateY(-8px) scale(1.02);
+        transform: translateY(-5px);
         box-shadow: 0 35px 55px -15px #00FF88;
         border-color: #00FF88;
     }
     .asset-name {
-        font-size: 22px;
+        font-size: 20px;
         font-weight: 700;
         color: #FFFFFF;
-        margin-bottom: 8px;
         display: flex;
         justify-content: space-between;
     }
     .asset-price {
         font-size: 14px;
         color: #AAAAAA;
-        margin-bottom: 18px;
-        display: flex;
-        justify-content: space-between;
+        margin-bottom: 10px;
     }
     .asset-signal {
         font-size: 16px;
         font-weight: 700;
-        padding: 12px 16px;
-        border-radius: 40px;
+        padding: 10px;
+        border-radius: 30px;
         text-align: center;
-        margin-bottom: 15px;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        backdrop-filter: blur(4px);
+        margin: 10px 0;
     }
     .signal-compra {
         background: rgba(0, 255, 136, 0.2);
         color: #00FF88;
         border: 1px solid #00FF88;
-        box-shadow: 0 0 20px rgba(0,255,136,0.3);
     }
     .signal-venta {
         background: rgba(255, 70, 70, 0.2);
         color: #FF4646;
         border: 1px solid #FF4646;
-        box-shadow: 0 0 20px rgba(255,70,70,0.3);
     }
     .signal-neutral {
         background: rgba(255, 255, 255, 0.05);
@@ -146,69 +116,45 @@ st.markdown("""
         font-size: 13px;
         color: #888;
         margin-top: auto;
-        padding-top: 15px;
+        padding-top: 10px;
         border-top: 1px solid rgba(255,255,255,0.1);
-        display: flex;
-        justify-content: space-between;
     }
     .asset-prob {
-        font-size: 28px;
+        font-size: 24px;
         font-weight: 800;
-        margin: 10px 0;
-        text-shadow: 0 0 15px currentColor;
+        margin: 5px 0;
     }
-    /* Botones */
     .stButton button {
         background: linear-gradient(135deg, #00FF88, #00CC66);
         color: #0A0C10;
         font-weight: 700;
         border-radius: 40px;
         border: none;
-        padding: 14px 32px;
+        padding: 12px 28px;
         transition: all 0.3s;
         box-shadow: 0 12px 30px -8px #00FF88;
-        text-transform: uppercase;
-        letter-spacing: 1.5px;
-        font-size: 14px;
     }
     .stButton button:hover {
         background: linear-gradient(135deg, #00CC66, #00FF88);
         box-shadow: 0 18px 40px -5px #00FF88;
-        transform: scale(1.03);
     }
-    /* Alertas toast */
-    div[data-testid="stToast"] {
-        background: #1A2A1A !important;
-        border-left: 6px solid #FFAA00 !important;
-        border-radius: 16px !important;
-        color: white !important;
-        font-weight: 600 !important;
-        box-shadow: 0 20px 40px -10px #FFAA00 !important;
+    .reloj {
+        font-size: 20px;
+        font-weight: 600;
+        color: #00FF88;
+        text-align: right;
+        padding: 10px;
+        background: rgba(0,0,0,0.3);
+        border-radius: 20px;
+        margin-bottom: 10px;
     }
-    /* Panel de precisión */
-    .accuracy-panel {
-        background: rgba(18, 22, 30, 0.6);
-        backdrop-filter: blur(8px);
-        border-radius: 24px;
-        padding: 22px;
-        border: 1px solid #00FF8822;
-        margin-top: 25px;
-        box-shadow: 0 15px 30px -12px rgba(0,255,136,0.2);
-    }
-    /* Estrellas de fuerza */
-    .strength-star {
-        color: #FFD700;
-        font-size: 18px;
-        margin-left: 4px;
-        text-shadow: 0 0 8px #FFD700;
-    }
-    /* Score badge */
-    .score-badge {
-        background: #00FF8822;
-        border-radius: 30px;
+    .badge-1min {
+        background: #FFAA00;
+        color: black;
         padding: 4px 12px;
-        font-size: 14px;
-        border: 1px solid #00FF88;
+        border-radius: 30px;
+        font-size: 12px;
+        font-weight: 600;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -216,7 +162,7 @@ st.markdown("""
 # Zona horaria Ecuador
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
-# === CLASE DE CONEXIÓN (sin caché persistente entre actualizaciones) ===
+# === CLASE DE CONEXIÓN (sin cambios) ===
 class IQOptionConnector:
     def __init__(self):
         self.api = None
@@ -247,7 +193,6 @@ class IQOptionConnector:
         return 0
 
     def obtener_activos_disponibles(self, mercado="otc", max_activos=50):
-        """Obtiene la lista actualizada de activos (sin caché)."""
         if not self.conectado:
             return []
         try:
@@ -268,11 +213,18 @@ class IQOptionConnector:
             return []
 
     def obtener_velas(self, activo, intervalo=5, limite=100):
+        """
+        intervalo: 1 o 5 minutos
+        """
         if not self.conectado:
             return None
         try:
-            time.sleep(0.15)  # Pausa para no saturar
-            velas = self.api.get_candles(activo, 60, limite * 5, time.time())
+            time.sleep(0.15)
+            # IQ Option da velas de 1 minuto, así que para 5 min pedimos más y resampleamos
+            if intervalo == 5:
+                velas = self.api.get_candles(activo, 60, limite * 5, time.time())
+            else:
+                velas = self.api.get_candles(activo, 60, limite, time.time())
             if not velas:
                 return None
             df = pd.DataFrame(velas)
@@ -301,15 +253,13 @@ class IQOptionConnector:
 
 # === INDICADORES COMUNES ===
 def calcular_indicadores_base(df):
-    if df is None or len(df) < 30:
+    if df is None or len(df) < 20:
         return None
     # RSI
     df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
     # EMAs
     df['ema_20'] = ta.trend.EMAIndicator(df['close'], window=20).ema_indicator()
     df['ema_50'] = ta.trend.EMAIndicator(df['close'], window=50).ema_indicator()
-    # ATR
-    df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
     # Volumen
     df['volume_ma'] = df['volume'].rolling(20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma'].clip(lower=1)
@@ -323,25 +273,18 @@ def calcular_indicadores_base(df):
     df['bb_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / df['close'] * 100
     return df
 
-# === FILTRO DE CONTINUACIÓN DE TENDENCIA ===
+# === FILTRO DE CONTINUACIÓN (menos estricto) ===
 def verificar_continuacion_tendencia(df):
-    """
-    Evalúa si la tendencia actual tiene altas probabilidades de continuar.
-    Retorna True/False.
-    """
     if df is None or len(df) < 20:
         return False
     ult = df.iloc[-1]
-    # Condiciones:
-    # 1. ADX > 25 (tendencia fuerte) O volumen extremadamente alto (>2.0)
-    # 2. Bandas de Bollinger no extremadamente estrechas (evitar laterales)
-    # 3. La pendiente de la EMA20 debe ser coherente con la dirección (se evaluará en estrategias)
-    cond1 = (ult['adx'] > 25) or (ult['volume_ratio'] > 2.0)
-    cond2 = ult['bb_width'] > 1.0  # Si es menor, mercado lateral
+    # Condiciones más suaves para permitir más señales
+    cond1 = (ult['adx'] > 20) or (ult['volume_ratio'] > 1.3)
+    cond2 = ult['bb_width'] > 0.8  # Ancho de banda mínimo
     return cond1 and cond2
 
-# === ESTRATEGIA 1: Ruptura de máximo/mínimo con volumen ===
-def estrategia_ruptura(df):
+# === ESTRATEGIAS PARA 5 MINUTOS (ajustadas) ===
+def estrategia_ruptura_5min(df):
     if not verificar_continuacion_tendencia(df):
         return None, 0
     ult = df.iloc[-1]
@@ -349,98 +292,78 @@ def estrategia_ruptura(df):
     max_reciente = df['high'].iloc[-ventana-1:-1].max()
     min_reciente = df['low'].iloc[-ventana-1:-1].min()
     # Ruptura alcista
-    if ult['close'] > max_reciente and ult['volume_ratio'] > 1.8:
-        if ult['adx'] > 25 and ult['adx_pos'] > ult['adx_neg']:
-            return 'COMPRA', 90
+    if ult['close'] > max_reciente and ult['volume_ratio'] > 1.3:
+        if ult['adx'] > 20 and ult['adx_pos'] > ult['adx_neg']:
+            return 'COMPRA', 80
         else:
-            return 'COMPRA', 75
+            return 'COMPRA', 65
     # Ruptura bajista
-    elif ult['close'] < min_reciente and ult['volume_ratio'] > 1.8:
-        if ult['adx'] > 25 and ult['adx_neg'] > ult['adx_pos']:
-            return 'VENTA', 90
+    elif ult['close'] < min_reciente and ult['volume_ratio'] > 1.3:
+        if ult['adx'] > 20 and ult['adx_neg'] > ult['adx_pos']:
+            return 'VENTA', 80
         else:
-            return 'VENTA', 75
+            return 'VENTA', 65
     return None, 0
 
-# === ESTRATEGIA 2: Pendiente de EMA + volumen ===
-def estrategia_pendiente_ema(df):
+def estrategia_pendiente_ema_5min(df):
     if not verificar_continuacion_tendencia(df):
         return None, 0
     ult = df.iloc[-1]
     pendiente = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
-    if pendiente > 0.01 * ult['close']:
-        if ult['volume_ratio'] > 1.5 and ult['adx'] > 25 and ult['adx_pos'] > ult['adx_neg']:
-            return 'COMPRA', 85
-        elif ult['volume_ratio'] > 1.2:
-            return 'COMPRA', 70
-    elif pendiente < -0.01 * ult['close']:
-        if ult['volume_ratio'] > 1.5 and ult['adx'] > 25 and ult['adx_neg'] > ult['adx_pos']:
-            return 'VENTA', 85
-        elif ult['volume_ratio'] > 1.2:
-            return 'VENTA', 70
+    if pendiente > 0.005 * ult['close']:
+        if ult['volume_ratio'] > 1.3 and ult['adx'] > 20 and ult['adx_pos'] > ult['adx_neg']:
+            return 'COMPRA', 75
+        elif ult['volume_ratio'] > 1.1:
+            return 'COMPRA', 60
+    elif pendiente < -0.005 * ult['close']:
+        if ult['volume_ratio'] > 1.3 and ult['adx'] > 20 and ult['adx_neg'] > ult['adx_pos']:
+            return 'VENTA', 75
+        elif ult['volume_ratio'] > 1.1:
+            return 'VENTA', 60
     return None, 0
 
-# === ESTRATEGIA 3: ADX alto sostenido + volumen ===
-def estrategia_adx_continuacion(df):
+def estrategia_adx_5min(df):
     if not verificar_continuacion_tendencia(df):
         return None, 0
     ult = df.iloc[-1]
-    # Verificar ADX alto durante al menos 3 velas
-    adx_alto = all(df['adx'].iloc[-i] > 25 for i in range(1,4) if len(df) >= i)
-    if adx_alto and ult['volume_ratio'] > 1.3:
+    # ADX alto durante al menos 2 velas
+    adx_alto = all(df['adx'].iloc[-i] > 20 for i in range(1,3) if len(df) >= i)
+    if adx_alto and ult['volume_ratio'] > 1.2:
         pendiente = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-3]) / 3
         if pendiente > 0:
-            return 'COMPRA', 80
+            return 'COMPRA', 70
         elif pendiente < 0:
-            return 'VENTA', 80
+            return 'VENTA', 70
     return None, 0
 
-# === REGISTRO DE PRECISIÓN ===
-class AccuracyTracker:
-    def __init__(self):
-        self.historial = []
-        self.estrategias = ['Ruptura', 'Pendiente EMA', 'ADX Continuación']
+# === ESTRATEGIAS PARA 1 MINUTO (rápidas) ===
+def estrategia_ruptura_1min(df):
+    """Ruptura de máximo/mínimo de últimas 5 velas con volumen"""
+    if df is None or len(df) < 10:
+        return None, 0
+    ult = df.iloc[-1]
+    ventana = 5
+    max_reciente = df['high'].iloc[-ventana-1:-1].max()
+    min_reciente = df['low'].iloc[-ventana-1:-1].min()
+    if ult['close'] > max_reciente and ult['volume_ratio'] > 1.5:
+        return 'COMPRA', 75
+    elif ult['close'] < min_reciente and ult['volume_ratio'] > 1.5:
+        return 'VENTA', 75
+    return None, 0
 
-    def registrar(self, nombre_estrategia, senal, resultado_real):
-        self.historial.append({
-            'estrategia': nombre_estrategia,
-            'senal': senal,
-            'acierto': resultado_real
-        })
+def estrategia_rsi_rapido_1min(df):
+    """RSI extremo con volumen"""
+    if df is None or len(df) < 14:
+        return None, 0
+    ult = df.iloc[-1]
+    if ult['rsi'] < 30 and ult['volume_ratio'] > 1.3:
+        return 'COMPRA', 70
+    elif ult['rsi'] > 70 and ult['volume_ratio'] > 1.3:
+        return 'VENTA', 70
+    return None, 0
 
-    def precision_por_estrategia(self):
-        if not self.historial:
-            return {nombre: 0.0 for nombre in self.estrategias}
-        df = pd.DataFrame(self.historial)
-        precision = df.groupby('estrategia')['acierto'].mean() * 100
-        return precision.to_dict()
-
-    def precision_global(self):
-        if not self.historial:
-            return 0.0
-        return np.mean([r['acierto'] for r in self.historial]) * 100
-
-# === FUNCIÓN PARA CALCULAR FUERZA Y SCORE ===
-def calcular_fuerza(prob, volume_ratio, adx):
-    fuerza = 0
-    if prob > 80:
-        fuerza += 2
-    elif prob > 65:
-        fuerza += 1
-    if volume_ratio > 2.0:
-        fuerza += 2
-    elif volume_ratio > 1.5:
-        fuerza += 1
-    if adx > 30:
-        fuerza += 1
-    return min(5, fuerza)
-
-def calcular_score(prob, volume_ratio, adx):
-    # Score ponderado: probabilidad * (1 + volumen/2) * (1 + adx/100)
-    return prob * (1 + volume_ratio/2) * (1 + adx/100)
-
-# === ANÁLISIS DE UN ACTIVO ===
-def analizar_activo(activo, connector):
+# === ANÁLISIS DE UN ACTIVO PARA 5 MIN ===
+def analizar_activo_5min(activo, connector):
     df = connector.obtener_velas(activo, intervalo=5, limite=100)
     if df is None:
         return None
@@ -449,111 +372,198 @@ def analizar_activo(activo, connector):
         return None
 
     estrategias = [
-        ('Ruptura', estrategia_ruptura),
-        ('Pendiente EMA', estrategia_pendiente_ema),
-        ('ADX Continuación', estrategia_adx_continuacion)
+        ('Ruptura', estrategia_ruptura_5min),
+        ('Pendiente EMA', estrategia_pendiente_ema_5min),
+        ('ADX', estrategia_adx_5min)
     ]
 
     votos_compra = 0
     votos_venta = 0
     peso_total = 0
-    detalles_estrategias = []
+    detalles = []
 
     for nombre, func in estrategias:
-        senal, confianza = func(df)
-        detalles_estrategias.append({
-            'nombre': nombre,
-            'senal': senal if senal else 'NEUTRAL',
-            'confianza': confianza
-        })
+        senal, conf = func(df)
+        detalles.append({'nombre': nombre, 'senal': senal if senal else 'NEUTRAL', 'confianza': conf})
         if senal == 'COMPRA':
-            votos_compra += confianza
-            peso_total += confianza
+            votos_compra += conf
+            peso_total += conf
         elif senal == 'VENTA':
-            votos_venta += confianza
-            peso_total += confianza
+            votos_venta += conf
+            peso_total += conf
 
     if peso_total == 0:
         senal_final = None
-        probabilidad = 0
+        prob = 0
     else:
         if votos_compra > votos_venta:
-            probabilidad = int((votos_compra / peso_total) * 100)
+            prob = int((votos_compra / peso_total) * 100)
             senal_final = 'COMPRA'
         elif votos_venta > votos_compra:
-            probabilidad = int((votos_venta / peso_total) * 100)
+            prob = int((votos_venta / peso_total) * 100)
             senal_final = 'VENTA'
         else:
             senal_final = None
-            probabilidad = 0
+            prob = 0
 
     ult = df.iloc[-1]
-    fuerza = calcular_fuerza(probabilidad, ult['volume_ratio'], ult['adx'])
-    score = calcular_score(probabilidad, ult['volume_ratio'], ult['adx']) if senal_final else 10
+    # Score ponderado
+    score = prob * (1 + ult['volume_ratio']/2) if senal_final else 10
 
     return {
         'activo': activo,
         'score': score,
         'senal': senal_final,
-        'probabilidad': probabilidad,
+        'probabilidad': prob,
         'precio': ult['close'],
         'rsi': ult['rsi'],
         'volume_ratio': ult['volume_ratio'],
         'adx': ult['adx'],
-        'fuerza': fuerza,
-        'df': df,
-        'detalles_estrategias': detalles_estrategias
+        'detalles': detalles,
+        'df': df
     }
 
-# === ACTUALIZAR TOP 2 ACTIVOS ===
-def actualizar_top_activos(connector, mercado, max_activos=50):
-    activos_lista = connector.obtener_activos_disponibles(mercado, max_activos)
-    if not activos_lista:
-        return []
-    resultados = []
+# === ANÁLISIS PARA 1 MIN ===
+def analizar_activo_1min(activo, connector):
+    df = connector.obtener_velas(activo, intervalo=1, limite=100)
+    if df is None:
+        return None
+    # Para 1 min no necesitamos todos los indicadores, solo RSI y volumen
+    # Calculamos RSI y volumen ratio
+    df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
+    df['volume_ma'] = df['volume'].rolling(20).mean()
+    df['volume_ratio'] = df['volume'] / df['volume_ma'].clip(lower=1)
+    # También necesitamos máximos/mínimos para ruptura
+    if len(df) < 10:
+        return None
+
+    # Evaluamos dos estrategias rápidas
+    senal1, conf1 = estrategia_ruptura_1min(df)
+    senal2, conf2 = estrategia_rsi_rapido_1min(df)
+
+    votos_compra = 0
+    votos_venta = 0
+    peso_total = 0
+    if senal1 == 'COMPRA':
+        votos_compra += conf1
+        peso_total += conf1
+    elif senal1 == 'VENTA':
+        votos_venta += conf1
+        peso_total += conf1
+    if senal2 == 'COMPRA':
+        votos_compra += conf2
+        peso_total += conf2
+    elif senal2 == 'VENTA':
+        votos_venta += conf2
+        peso_total += conf2
+
+    if peso_total == 0:
+        senal_final = None
+        prob = 0
+    else:
+        if votos_compra > votos_venta:
+            prob = int((votos_compra / peso_total) * 100)
+            senal_final = 'COMPRA'
+        elif votos_venta > votos_compra:
+            prob = int((votos_venta / peso_total) * 100)
+            senal_final = 'VENTA'
+        else:
+            senal_final = None
+            prob = 0
+
+    ult = df.iloc[-1]
+    score = prob * (1 + ult['volume_ratio']) if senal_final else 10
+
+    return {
+        'activo': activo,
+        'score': score,
+        'senal': senal_final,
+        'probabilidad': prob,
+        'precio': ult['close'],
+        'rsi': ult['rsi'],
+        'volume_ratio': ult['volume_ratio'],
+        'df': df
+    }
+
+# === ESCANEO COMPLETO ===
+def escanear_todo(connector, mercado, max_activos=50):
+    activos = connector.obtener_activos_disponibles(mercado, max_activos)
+    if not activos:
+        return [], []
+    resultados_5min = []
+    resultados_1min = []
     progreso = st.progress(0)
-    total = len(activos_lista)
-    for i, activo in enumerate(activos_lista):
+    total = len(activos)
+    for i, act in enumerate(activos):
         time.sleep(0.1)
-        res = analizar_activo(activo, connector)
-        if res:
-            resultados.append(res)
-        progreso.progress((i + 1) / total)
+        res5 = analizar_activo_5min(act, connector)
+        if res5:
+            resultados_5min.append(res5)
+        res1 = analizar_activo_1min(act, connector)
+        if res1:
+            resultados_1min.append(res1)
+        progreso.progress((i+1)/total)
     progreso.empty()
 
-    # Eliminar duplicados (por si acaso)
-    vistos = set()
-    resultados_unicos = []
-    for r in resultados:
-        if r['activo'] not in vistos:
-            vistos.add(r['activo'])
-            resultados_unicos.append(r)
+    # Ordenar por score
+    resultados_5min.sort(key=lambda x: x['score'], reverse=True)
+    resultados_1min.sort(key=lambda x: x['score'], reverse=True)
 
-    # Ordenar por score descendente
-    resultados_unicos.sort(key=lambda x: x['score'], reverse=True)
-    return resultados_unicos[:2]
+    # Tomar top 2 para 5 min y top 1 para 1 min
+    top_5min = resultados_5min[:2]
+    top_1min = resultados_1min[:1] if resultados_1min else []
+    return top_5min, top_1min
+
+# === REGISTRO DE PRECISIÓN (simplificado) ===
+class AccuracyTracker:
+    def __init__(self):
+        self.historial = []
+
+    def registrar(self, nombre_estrategia, senal, resultado):
+        self.historial.append({
+            'estrategia': nombre_estrategia,
+            'senal': senal,
+            'acierto': resultado
+        })
+
+    def precision_global(self):
+        if not self.historial:
+            return 0.0
+        return np.mean([r['acierto'] for r in self.historial]) * 100
+
+    def total_senales(self):
+        return len(self.historial)
 
 # === INTERFAZ PRINCIPAL ===
 def main():
     st.title("📈 IQ OPTION PRO SCANNER")
-    st.markdown("#### Sistema de IA con 3 Estrategias de Tendencia | Top 2 Activos en Tiempo Real")
-    st.markdown("---")
+    st.markdown("#### 2 Activos (5 min) + 1 Activo (1 min) | Tiempo real")
+
+    # Reloj en tiempo real
+    reloj_placeholder = st.empty()
+    def actualizar_reloj():
+        ahora = datetime.now(ecuador_tz)
+        reloj_placeholder.markdown(f"<div class='reloj'>⏰ {ahora.strftime('%H:%M:%S')} ECU</div>", unsafe_allow_html=True)
 
     # Inicializar estado
     if 'connector' not in st.session_state:
         st.session_state.connector = IQOptionConnector()
     if 'conectado' not in st.session_state:
         st.session_state.conectado = False
-    if 'top_activos' not in st.session_state:
-        st.session_state.top_activos = []
+    if 'top_5min' not in st.session_state:
+        st.session_state.top_5min = []
+    if 'top_1min' not in st.session_state:
+        st.session_state.top_1min = []
     if 'ultima_actualizacion' not in st.session_state:
         st.session_state.ultima_actualizacion = None
     if 'mercado_actual' not in st.session_state:
         st.session_state.mercado_actual = "otc"
     if 'tracker' not in st.session_state:
         st.session_state.tracker = AccuracyTracker()
-    if 'notificaciones_activas' not in st.session_state:
-        st.session_state.notificaciones_activas = set()
+    if 'notificaciones_5min' not in st.session_state:
+        st.session_state.notificaciones_5min = set()
+    if 'notificaciones_1min' not in st.session_state:
+        st.session_state.notificaciones_1min = set()
 
     # Barra lateral
     with st.sidebar:
@@ -585,7 +595,8 @@ def main():
             if st.button("🚪 Desconectar"):
                 st.session_state.conectado = False
                 st.session_state.connector = IQOptionConnector()
-                st.session_state.top_activos = []
+                st.session_state.top_5min = []
+                st.session_state.top_1min = []
                 st.rerun()
 
         st.markdown("---")
@@ -601,74 +612,68 @@ def main():
             mercado_key = "otc" if "OTC" in mercado else "forex"
             st.session_state.mercado_actual = mercado_key
 
-            if st.button("🔍 ANALIZAR TOP 2 (NUEVO ESCANEO)", use_container_width=True):
-                with st.spinner("Escaneando TODOS los activos disponibles..."):
-                    top = actualizar_top_activos(
+            if st.button("🔍 ANALIZAR TODO", use_container_width=True):
+                with st.spinner("Escaneando activos..."):
+                    top5, top1 = escanear_todo(
                         st.session_state.connector,
                         mercado_key,
                         max_activos=50
                     )
-                    st.session_state.top_activos = top
+                    st.session_state.top_5min = top5
+                    st.session_state.top_1min = top1
                     st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
-                    st.session_state.notificaciones_activas = set()
-                    if top:
-                        st.success(f"✅ Nuevo análisis completado. {len(top)} activos encontrados.")
+                    st.session_state.notificaciones_5min = set()
+                    st.session_state.notificaciones_1min = set()
+                    if top5 or top1:
+                        st.success(f"✅ Análisis completado: {len(top5)} activos 5min, {len(top1)} activos 1min")
                     else:
-                        st.warning("No se encontraron activos con datos suficientes.")
+                        st.warning("No se encontraron activos con datos.")
                     st.rerun()
 
     # Verificar conexión
     if not st.session_state.conectado:
         st.info("👆 Conéctate a IQ Option en la barra lateral.")
-        cols = st.columns(2)
-        for i in range(2):
-            with cols[i]:
-                st.markdown("""
-                <div class="asset-card">
-                    <div class="asset-name">Esperando conexión...</div>
-                </div>
-                """, unsafe_allow_html=True)
+        actualizar_reloj()
         return
 
-    # Botón de actualización manual
+    # Botón de actualización manual y reloj
     col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
-        if st.button("🔄 ACTUALIZAR ANÁLISIS", use_container_width=True):
-            with st.spinner("Actualizando con nuevos datos de mercado..."):
-                top = actualizar_top_activos(
+        if st.button("🔄 ACTUALIZAR TODO", use_container_width=True):
+            with st.spinner("Actualizando..."):
+                top5, top1 = escanear_todo(
                     st.session_state.connector,
                     st.session_state.mercado_actual,
                     max_activos=50
                 )
-                st.session_state.top_activos = top
+                st.session_state.top_5min = top5
+                st.session_state.top_1min = top1
                 st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
-                st.session_state.notificaciones_activas = set()
+                st.session_state.notificaciones_5min = set()
+                st.session_state.notificaciones_1min = set()
                 st.rerun()
 
     with col3:
         if st.session_state.ultima_actualizacion:
             st.caption(f"Último análisis: {st.session_state.ultima_actualizacion.strftime('%H:%M:%S')}")
 
+    actualizar_reloj()  # Mostrar reloj actualizado
     st.markdown("---")
 
-    # Mostrar los 2 mejores activos
-    st.subheader("🔥 TOP 2 ACTIVOS MÁS CONFIABLES")
+    # === ACTIVOS DE 5 MINUTOS (arriba) ===
+    st.subheader("🔥 TOP 2 ACTIVOS - VENCIMIENTO 5 MINUTOS")
 
-    if not st.session_state.top_activos:
-        st.warning("Presiona 'ANALIZAR TOP 2' para obtener resultados.")
+    if not st.session_state.top_5min:
+        st.warning("No hay activos de 5 minutos. Presiona 'ANALIZAR TODO'.")
         cols = st.columns(2)
         for i in range(2):
             with cols[i]:
                 st.markdown("""
                 <div class="asset-card">
-                    <div class="asset-name">Cargando...</div>
+                    <div class="asset-name">Sin datos</div>
                 </div>
                 """, unsafe_allow_html=True)
     else:
-        activos_mostrar = st.session_state.top_activos.copy()
-        while len(activos_mostrar) < 2:
-            activos_mostrar.append(None)
-
         cols = st.columns(2)
         ahora = datetime.now(ecuador_tz)
         minutos = ahora.minute
@@ -677,113 +682,104 @@ def main():
         tiempo_salida = tiempo_entrada + timedelta(minutes=5)
         segundos_restantes = (tiempo_entrada - ahora).seconds
 
-        for idx, activo in enumerate(activos_mostrar):
+        for idx, activo in enumerate(st.session_state.top_5min):
             with cols[idx]:
-                if activo is None:
-                    st.markdown("""
-                    <div class="asset-card" style="opacity:0.5;">
-                        <div class="asset-name">En espera...</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    color_prob = "#00FF88" if activo['senal'] == 'COMPRA' else "#FF4646" if activo['senal'] == 'VENTA' else "#AAAAAA"
-                    nombre = activo['activo'].replace("-OTC", "")
-                    estrellas = "⭐" * activo['fuerza'] + "☆" * (5 - activo['fuerza'])
+                color_prob = "#00FF88" if activo['senal'] == 'COMPRA' else "#FF4646" if activo['senal'] == 'VENTA' else "#AAAAAA"
+                nombre = activo['activo'].replace("-OTC", "")
+                signal_class = f"signal-{activo['senal'].lower()}" if activo['senal'] else "signal-neutral"
 
-                    # Notificación toast si es el momento
-                    if activo['senal'] and segundos_restantes <= 60 and segundos_restantes > 0:
-                        clave_notif = f"{activo['activo']}_{tiempo_entrada}"
-                        if clave_notif not in st.session_state.notificaciones_activas:
-                            st.toast(f"📢 **¡ATENCIÓN!** Opera a las {tiempo_entrada.strftime('%H:%M')} – Vence a las {tiempo_salida.strftime('%H:%M')} – {nombre} – {activo['senal']}", icon="⏰")
-                            st.session_state.notificaciones_activas.add(clave_notif)
+                # Notificación 1 min antes
+                if activo['senal'] and segundos_restantes <= 60 and segundos_restantes > 0:
+                    clave = f"{activo['activo']}_{tiempo_entrada}"
+                    if clave not in st.session_state.notificaciones_5min:
+                        st.toast(f"📢 **¡ATENCIÓN!** Opera a las {tiempo_entrada.strftime('%H:%M')} – {nombre} – {activo['senal']}", icon="⏰")
+                        st.session_state.notificaciones_5min.add(clave)
 
-                    st.markdown(f"""
-                    <div class="asset-card">
-                        <div class="asset-name">
-                            {nombre}
-                            <span class="score-badge">Score: {activo['score']:.0f}</span>
-                        </div>
-                        <div class="asset-price">
-                            <span>Precio: {activo['precio']:.5f}</span>
-                            <span>RSI: {activo['rsi']:.1f}</span>
-                        </div>
-                        <div class="asset-signal {'signal-compra' if activo['senal']=='COMPRA' else 'signal-venta' if activo['senal']=='VENTA' else 'signal-neutral'}">
-                            {activo['senal'] if activo['senal'] else 'NEUTRAL'}
-                        </div>
-                        <div class="asset-prob" style="color: {color_prob};">{activo['probabilidad']}%</div>
-                        <div class="asset-footer">
-                            <span>⏰ Entrada: {tiempo_entrada.strftime('%H:%M')}</span>
-                            <span>⏳ Vence: {tiempo_salida.strftime('%H:%M')}</span>
-                        </div>
-                        <div style="margin-top:10px; font-size:20px;">{estrellas}</div>
+                st.markdown(f"""
+                <div class="asset-card">
+                    <div class="asset-name">{nombre} <span>Score: {activo['score']:.0f}</span></div>
+                    <div class="asset-price">Precio: {activo['precio']:.5f} | RSI: {activo['rsi']:.1f}</div>
+                    <div class="asset-signal {signal_class}">{activo['senal'] if activo['senal'] else 'NEUTRAL'}</div>
+                    <div class="asset-prob" style="color: {color_prob};">{activo['probabilidad']}%</div>
+                    <div class="asset-footer">
+                        ⏰ Entrada: {tiempo_entrada.strftime('%H:%M')} | ⏳ Vence: {tiempo_salida.strftime('%H:%M')}
                     </div>
-                    """, unsafe_allow_html=True)
+                </div>
+                """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # === ACTIVO DE 1 MINUTO (abajo) ===
+    st.subheader("⚡ ACTIVO DESTACADO - VENCIMIENTO 1 MINUTO")
+
+    if not st.session_state.top_1min:
+        st.info("No hay activo de 1 minuto en este momento.")
+        st.markdown("""
+        <div class="asset-card">
+            <div class="asset-name">Sin datos</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        activo = st.session_state.top_1min[0]
+        ahora = datetime.now(ecuador_tz)
+        # Para 1 min, la hora de entrada es el minuto actual (redondeado hacia arriba)
+        minutos = ahora.minute
+        segundos = ahora.second
+        # La próxima vela de 1 minuto empieza en el próximo minuto exacto
+        tiempo_entrada = ahora.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        tiempo_salida = tiempo_entrada + timedelta(minutes=1)
+        # Si faltan menos de 10 segundos, mostramos "Opera ahora"
+        if (tiempo_entrada - ahora).seconds <= 10 and activo['senal']:
+            mensaje_entrada = "🔥 ¡OPERA AHORA!"
+        else:
+            mensaje_entrada = f"⏰ Entrada: {tiempo_entrada.strftime('%H:%M:%S')}"
+
+        color_prob = "#00FF88" if activo['senal'] == 'COMPRA' else "#FF4646" if activo['senal'] == 'VENTA' else "#AAAAAA"
+        nombre = activo['activo'].replace("-OTC", "")
+        signal_class = f"signal-{activo['senal'].lower()}" if activo['senal'] else "signal-neutral"
+
+        # Notificación (solo si es "Opera ahora")
+        if activo['senal'] and (tiempo_entrada - ahora).seconds <= 10:
+            clave = f"{activo['activo']}_1min_{tiempo_entrada}"
+            if clave not in st.session_state.notificaciones_1min:
+                st.toast(f"⚡ **¡OPERA AHORA!** {nombre} – {activo['senal']} – Vence a las {tiempo_salida.strftime('%H:%M:%S')}", icon="🚀")
+                st.session_state.notificaciones_1min.add(clave)
+
+        st.markdown(f"""
+        <div class="asset-card">
+            <div class="asset-name">{nombre} <span class="badge-1min">1 MIN</span></div>
+            <div class="asset-price">Precio: {activo['precio']:.5f} | RSI: {activo['rsi']:.1f}</div>
+            <div class="asset-signal {signal_class}">{activo['senal'] if activo['senal'] else 'NEUTRAL'}</div>
+            <div class="asset-prob" style="color: {color_prob};">{activo['probabilidad']}%</div>
+            <div class="asset-footer">
+                {mensaje_entrada} | ⏳ Vence: {tiempo_salida.strftime('%H:%M:%S')}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Panel de precisión
     st.markdown("---")
-    st.subheader("📊 Precisión de Estrategias")
+    st.subheader("📊 Precisión Global")
+    st.metric("Total de señales registradas", st.session_state.tracker.total_senales())
+    st.metric("Precisión global", f"{st.session_state.tracker.precision_global():.1f}%")
 
-    precision_estrategias = st.session_state.tracker.precision_por_estrategia()
-    precision_global = st.session_state.tracker.precision_global()
-
-    cols = st.columns(5)
-    with cols[0]:
-        st.metric("Ruptura", f"{precision_estrategias.get('Ruptura', 0):.1f}%")
-    with cols[1]:
-        st.metric("Pendiente EMA", f"{precision_estrategias.get('Pendiente EMA', 0):.1f}%")
-    with cols[2]:
-        st.metric("ADX", f"{precision_estrategias.get('ADX Continuación', 0):.1f}%")
-    with cols[3]:
-        st.metric("Global", f"{precision_global:.1f}%")
-    with cols[4]:
-        st.metric("Total señales", len(st.session_state.tracker.historial))
-
-    # Botones de simulación (opcional)
+    # Botones de simulación (opcional, pero pueden eliminarse en producción)
     with st.expander("🛠️ Simulación de resultados (solo pruebas)"):
         col1, col2 = st.columns(2)
         with col1:
             if st.button("✅ Simular acierto"):
-                if st.session_state.top_activos:
-                    for est in ['Ruptura', 'Pendiente EMA', 'ADX Continuación']:
-                        st.session_state.tracker.registrar(est, 'COMPRA', True)
-                    st.rerun()
+                st.session_state.tracker.registrar('Ruptura', 'COMPRA', True)
+                st.rerun()
         with col2:
             if st.button("❌ Simular fallo"):
-                if st.session_state.top_activos:
-                    for est in ['Ruptura', 'Pendiente EMA', 'ADX Continuación']:
-                        st.session_state.tracker.registrar(est, 'COMPRA', False)
-                    st.rerun()
+                st.session_state.tracker.registrar('Ruptura', 'COMPRA', False)
+                st.rerun()
 
-    # Mostrar detalles de estrategias para el activo principal
-    if st.session_state.top_activos:
-        mejor = st.session_state.top_activos[0]
-        with st.expander(f"🔍 Ver votos de estrategias para {mejor['activo'].replace('-OTC','')}"):
-            for det in mejor['detalles_estrategias']:
+    # Mostrar detalles de estrategias para el primer activo de 5 min (opcional)
+    if st.session_state.top_5min:
+        with st.expander("🔍 Ver votos de estrategias (primer activo 5 min)"):
+            for det in st.session_state.top_5min[0]['detalles']:
                 st.write(f"**{det['nombre']}**: {det['senal']} (confianza {det['confianza']})")
-
-    # Gráfico del activo principal (opcional)
-    if st.session_state.top_activos and st.checkbox("📉 Mostrar gráfico del activo principal"):
-        mejor = st.session_state.top_activos[0]
-        df_graf = mejor['df'].iloc[-50:].copy()
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                            row_heights=[0.7, 0.3],
-                            subplot_titles=("Precio con EMAs", "Volumen"))
-        fig.add_trace(go.Candlestick(x=df_graf.index,
-                                      open=df_graf['open'],
-                                      high=df_graf['high'],
-                                      low=df_graf['low'],
-                                      close=df_graf['close'],
-                                      increasing_line_color='#00FF88',
-                                      decreasing_line_color='#FF4646'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_20'],
-                                  line=dict(color='#2962FF', width=2), name="EMA 20"), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_50'],
-                                  line=dict(color='#FFAA00', width=2), name="EMA 50"), row=1, col=1)
-        fig.add_trace(go.Bar(x=df_graf.index, y=df_graf['volume'],
-                              marker_color='#00FF88', name="Volumen"), row=2, col=1)
-        fig.update_layout(height=600, template="plotly_dark", showlegend=False,
-                          paper_bgcolor="#0A0C10", plot_bgcolor="#0A0C10")
-        st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     main()
