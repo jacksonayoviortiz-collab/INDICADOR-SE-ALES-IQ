@@ -1,6 +1,13 @@
 """
-Sistema Profesional de Trading IQ Option - TOP 4 SCANNER
-Versión: 11.0 (compatible con Python 3.13, numpy 2, streamlit 1.40)
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN DEFINITIVA
+Características:
+- Conexión en vivo a IQ Option (WebSockets)
+- Selección automática de mercado (Normal/OTC)
+- Escaneo y análisis de hasta 50 activos en tiempo real
+- Sistema de IA (scoring ponderado) para elegir los 4 mejores activos
+- Señales de 5 minutos con alerta 1 minuto antes
+- Interfaz profesional con 4 tarjetas de activos y gráfico principal
+- Rotación automática de activos según su rendimiento
 """
 
 import streamlit as st
@@ -16,23 +23,22 @@ import logging
 import warnings
 warnings.filterwarnings('ignore')
 
-# Configurar logging
+# === CONFIGURACIÓN DE LOGGING ===
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 
-# Intentar importar la API de IQ Option
+# === IMPORTAR LA API DE IQ OPTION (desde el fork actualizado) ===
 try:
     from iqoptionapi.stable_api import IQ_Option
     IQ_AVAILABLE = True
 except ImportError as e:
     IQ_AVAILABLE = False
     st.error(f"""
-    ⚠️ No se pudo importar la librería iqoptionapi: {e}
-    Por favor verifica la instalación o usa una versión alternativa.
+    ⚠️ **Error crítico:** No se pudo importar la librería `iqoptionapi`.
+    Por favor, verifica que la dependencia en `requirements.txt` esté correcta.
+    Detalles: {e}
     """)
 
-# ============================================
-# CONFIGURACIÓN DE PÁGINA Y TEMA PROFESIONAL
-# ============================================
+# === CONFIGURACIÓN DE LA PÁGINA (DEBE SER LO PRIMERO) ===
 st.set_page_config(
     page_title="IQ Option Pro Scanner",
     page_icon="📊",
@@ -40,68 +46,70 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS personalizado (igual que antes)
+# === CSS PERSONALIZADO PARA DISEÑO PROFESIONAL (Basado en la imagen) ===
 st.markdown("""
 <style>
-    .stApp { background-color: #131722; color: #d1d4dc; }
-    h1, h2, h3 { color: #ffffff !important; font-weight: 600 !important; }
-    h1 { border-bottom: 2px solid #2962ff; padding-bottom: 10px; }
+    /* Fondo general - oscuro profesional */
+    .stApp { background-color: #0F1217; color: #E5E7EB; font-family: 'Inter', sans-serif; }
+    h1, h2, h3 { color: #FFFFFF !important; font-weight: 600 !important; }
+    h1 { border-bottom: 2px solid #2962FF; padding-bottom: 10px; }
+    /* Tarjetas de activos (4 columnas) */
     .asset-card {
-        background: linear-gradient(145deg, #1e222d, #1a1e28);
-        border-radius: 16px;
+        background: linear-gradient(165deg, #1A1F2B, #141925);
+        border-radius: 20px;
         padding: 20px 15px;
-        box-shadow: 0 8px 20px rgba(0,0,0,0.5);
-        border: 1px solid #2a2e39;
+        box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
+        border: 1px solid #2A303C;
         transition: transform 0.2s, box-shadow 0.2s;
         height: 100%;
         display: flex;
         flex-direction: column;
+        border-left: 4px solid #2962FF;
     }
-    .asset-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 12px 28px rgba(41,98,255,0.2);
-        border-color: #2962ff;
-    }
-    .asset-name { font-size: 18px; font-weight: 600; color: #ffffff; margin-bottom: 8px; }
-    .asset-status { font-size: 14px; color: #9ca3af; margin-bottom: 12px; }
+    .asset-card:hover { transform: translateY(-5px); box-shadow: 0 20px 30px -10px #2962FF33; }
+    .asset-name { font-size: 18px; font-weight: 700; color: #FFFFFF; margin-bottom: 5px; }
+    .asset-price { font-size: 14px; color: #9CA3AF; margin-bottom: 15px; }
     .asset-signal {
-        font-size: 16px; font-weight: 700; padding: 8px 12px; border-radius: 8px;
+        font-size: 16px; font-weight: 700; padding: 10px 12px; border-radius: 12px;
         text-align: center; margin-bottom: 10px;
     }
-    .signal-compra {
-        background-color: rgba(0, 200, 100, 0.15); color: #00c864; border-left: 4px solid #00c864;
+    .signal-compra { background-color: rgba(0, 200, 100, 0.15); color: #00C864; border-left: 4px solid #00C864; }
+    .signal-venta { background-color: rgba(255, 70, 70, 0.15); color: #FF4646; border-left: 4px solid #FF4646; }
+    .signal-neutral { background-color: rgba(156, 163, 175, 0.1); color: #9CA3AF; border-left: 4px solid #9CA3AF; }
+    .asset-footer {
+        font-size: 13px; color: #9CA3AF; margin-top: auto; padding-top: 15px;
+        border-top: 1px solid #2A303C; display: flex; justify-content: space-between;
     }
-    .signal-venta {
-        background-color: rgba(255, 70, 70, 0.15); color: #ff4646; border-left: 4px solid #ff4646;
-    }
-    .signal-neutral {
-        background-color: rgba(156, 163, 175, 0.1); color: #9ca3af; border-left: 4px solid #9ca3af;
-    }
-    .asset-time { font-size: 13px; color: #9ca3af; margin-top: auto; padding-top: 10px; border-top: 1px solid #2a2e39; }
-    .asset-prob { font-size: 20px; font-weight: 700; margin: 10px 0; }
+    .asset-prob { font-size: 22px; font-weight: 800; margin: 5px 0; }
+    /* Botones y controles */
     .stButton button {
-        background-color: #2962ff; color: white; font-weight: 600; border-radius: 8px;
-        border: none; padding: 10px 20px; transition: background 0.2s;
+        background-color: #2962FF; color: white; font-weight: 600; border-radius: 12px;
+        border: none; padding: 10px 25px; transition: all 0.2s; box-shadow: 0 4px 12px #2962FF66;
     }
-    .stButton button:hover { background-color: #1e4bd7; }
+    .stButton button:hover { background-color: #1E4BD7; box-shadow: 0 6px 16px #2962FF99; }
+    /* Alertas anticipadas */
     .alert-box {
-        background: linear-gradient(90deg, #1e2a3a, #131722); border-left: 6px solid #ffaa00;
-        border-radius: 12px; padding: 20px; margin: 20px 0; box-shadow: 0 4px 12px rgba(255,170,0,0.2);
+        background: linear-gradient(90deg, #1E293B, #0F1217);
+        border-left: 6px solid #FFAA00;
+        border-radius: 16px;
+        padding: 20px 25px;
+        margin: 20px 0;
+        box-shadow: 0 10px 20px -5px #FFAA0044;
     }
-    .metric-card { background-color: #1e222d; border-radius: 12px; padding: 15px; border: 1px solid #2a2e39; }
-    .css-1d391kg { background-color: #1a1e28 !important; }
-    .stTextInput input { background-color: #1e222d; border: 1px solid #2a2e39; color: white; border-radius: 8px; }
-    .stSelectbox div[data-baseweb="select"] > div { background-color: #1e222d; border-color: #2a2e39; color: white; }
+    /* Selector de mercado */
+    .mercado-selector {
+        background: #1A1F2B; padding: 10px; border-radius: 50px; display: flex;
+        gap: 10px; border: 1px solid #2A303C; margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Zona horaria Ecuador
+# === ZONA HORARIA (ECUADOR) ===
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
-# ============================================
-# CLASE DE CONEXIÓN CON IQ OPTION (MEJORADA)
-# ============================================
+# === CLASE DE CONEXIÓN Y DATOS DE IQ OPTION ===
 class IQOptionConnector:
+    """Maneja toda la comunicación con la API de IQ Option."""
     def __init__(self):
         self.api = None
         self.conectado = False
@@ -109,14 +117,15 @@ class IQOptionConnector:
         self.ultima_actualizacion_activos = None
 
     def conectar(self, email, password):
+        """Establece la conexión con IQ Option."""
         if not IQ_AVAILABLE:
-            return False, "Librería IQ Option no disponible"
+            return False, "Librería IQ Option no instalada o no encontrada."
         try:
             self.api = IQ_Option(email, password)
             check, reason = self.api.connect()
             if check:
                 self.conectado = True
-                return True, "Conectado"
+                return True, "Conexión exitosa"
             else:
                 return False, reason
         except Exception as e:
@@ -133,49 +142,67 @@ class IQOptionConnector:
         return 0
 
     def obtener_activos_disponibles(self, mercado="otc", max_activos=50):
+        """
+        Obtiene dinámicamente los activos disponibles desde IQ Option.
+        - mercado = "forex" para Normal, "otc" para OTC.
+        """
         if not self.conectado:
             return []
         ahora = time.time()
         cache_key = f"{mercado}_{max_activos}"
-        # Cache por 5 minutos
+
+        # Usar caché por 5 minutos para no saturar la API
         if (self.ultima_actualizacion_activos and
             ahora - self.ultima_actualizacion_activos < 300 and
             cache_key in self.activos_cache):
             return self.activos_cache[cache_key]
+
         try:
             activos_data = self.api.get_all_open_time()
             activos = []
+
             if mercado == "forex":
+                # Mercado Normal: activos de forex que estén abiertos y no sean OTC
                 for activo, data in activos_data.get("forex", {}).items():
                     if data.get("open", False) and "-OTC" not in activo:
                         activos.append(activo)
-            else:  # OTC
+            else:
+                # Mercado OTC: activos en binary/turbo que tengan "-OTC"
                 for categoria in ["binary", "turbo"]:
                     for activo, data in activos_data.get(categoria, {}).items():
                         if data.get("open", False) and "-OTC" in activo:
                             activos.append(activo)
+
             activos = sorted(activos)[:max_activos]
             self.activos_cache[cache_key] = activos
             self.ultima_actualizacion_activos = ahora
             return activos
         except Exception as e:
-            st.error(f"Error obteniendo activos: {e}")
+            st.error(f"Error obteniendo activos desde IQ Option: {e}")
             return []
 
     def obtener_velas(self, activo, intervalo=5, limite=100):
+        """
+        Obtiene velas históricas de un activo.
+        - intervalo: 5 para velas de 5 minutos.
+        """
         if not self.conectado:
             return None
         try:
             # Pequeña pausa para no saturar la API
-            time.sleep(0.2)
+            time.sleep(0.15)
+            # IQ Option devuelve velas de 1 minuto, luego las agrupamos
             velas = self.api.get_candles(activo, 60, limite * 5, time.time())
             if not velas or len(velas) == 0:
                 return None
+
             df = pd.DataFrame(velas)
             df['datetime'] = pd.to_datetime(df['from'], unit='s')
             df = df.set_index('datetime')
             df = df.rename(columns={'open': 'open', 'max': 'high', 'min': 'low', 'close': 'close'})
             df = df[['open', 'high', 'low', 'close']].astype(float).sort_index()
+
+            # Agrupar en velas de 5 minutos
             if intervalo == 5:
                 df = df.resample('5T').agg({
                     'open': 'first',
@@ -188,82 +215,80 @@ class IQOptionConnector:
             logging.error(f"Error obteniendo velas de {activo}: {e}")
             return None
 
-# ============================================
-# FUNCIONES DE INDICADORES TÉCNICOS
-# ============================================
+# === FUNCIONES DE INDICADORES TÉCNICOS Y ANÁLISIS (IA) ===
 def calcular_indicadores(df):
+    """Calcula un set completo de indicadores técnicos usando la librería 'ta'."""
     if df is None or len(df) < 30:
         return None
 
     # RSI
     df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-
     # Momentum (ROC)
     df['momentum'] = ta.momentum.ROCIndicator(df['close'], window=10).roc()
-
     # EMAs
     df['ema_20'] = ta.trend.EMAIndicator(df['close'], window=20).ema_indicator()
     df['ema_50'] = ta.trend.EMAIndicator(df['close'], window=50).ema_indicator()
-
     # Bandas de Bollinger
     bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
     df['BBU'] = bb.bollinger_hband()
     df['BBL'] = bb.bollinger_lband()
     df['bb_pos'] = (df['close'] - df['BBL']) / (df['BBU'] - df['BBL']).clip(lower=0.001)
-
-    # Volumen simulado
+    # Volumen simulado (basado en rango)
     df['volume'] = (df['high'] - df['low']) * 1000 / df['close']
     df['volume_ma'] = df['volume'].rolling(20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma'].clip(lower=1)
-
-    # ATR y volatilidad
+    # ATR y Volatilidad
     df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
     df['volatilidad'] = df['atr'] / df['close'] * 100
 
     return df
 
-def generar_score(df):
+def generar_score_ia(df):
+    """
+    Genera un 'Score de IA' para un activo. Este score ponderado es el que
+    utiliza el bot para rankear los activos y decidir los 4 mejores.
+    Es una simulación de un modelo de Machine Learning basado en reglas técnicas.
+    """
     if df is None or len(df) < 30:
         return 0
     ult = df.iloc[-1]
     prev = df.iloc[-2]
-    score = 50
+    score = 50  # Puntuación base
 
-    # Tendencia EMAs
+    # 1. Tendencia y Cruce de EMAs (+30/-10)
     if ult['ema_20'] > ult['ema_50']:
         score += 10
     else:
         score -= 10
-
-    # Cruce de EMAs
-    if prev['ema_20'] < prev['ema_50'] and ult['ema_20'] > ult['ema_50']:
+    if prev['ema_20'] < prev['ema_50'] and ult['ema_20'] > ult['ema_50']:  # Cruce Alcista
         score += 30
-    elif prev['ema_20'] > prev['ema_50'] and ult['ema_20'] < ult['ema_50']:
+    elif prev['ema_20'] > prev['ema_50'] and ult['ema_20'] < ult['ema_50']:  # Cruce Bajista
         score += 30
 
-    # RSI extremo
+    # 2. RSI extremo (sobrecompra/venta) (+20)
     if ult['rsi'] < 30:
         score += 20
     elif ult['rsi'] > 70:
         score += 20
 
-    # Bandas de Bollinger
-    if ult['bb_pos'] < 0.1:
-        score += 15
-    elif ult['bb_pos'] > 0.9:
+    # 3. Posición en Bandas de Bollinger (reversiones) (+15)
+    if ult['bb_pos'] < 0.1 or ult['bb_pos'] > 0.9:
         score += 15
 
-    # Volumen alto
+    # 4. Volumen inusual (+15)
     if ult['volume_ratio'] > 1.5:
         score += 15
 
-    # Momentum fuerte
+    # 5. Momentum fuerte (+10)
     if abs(ult['momentum']) > 2:
         score += 10
 
     return score
 
-def detectar_senal(df):
+def detectar_senal_y_prob(df):
+    """
+    Determina la señal de trading (COMPRA, VENTA o NEUTRAL) y su probabilidad asociada.
+    """
     if df is None or len(df) < 30:
         return None, 0
     ult = df.iloc[-1]
@@ -271,14 +296,14 @@ def detectar_senal(df):
     senal = None
     prob = 50
 
-    # Cruce de EMAs
+    # Regla 1: Cruce de EMAs
     if prev['ema_20'] < prev['ema_50'] and ult['ema_20'] > ult['ema_50']:
         senal = 'COMPRA'
         prob = 75
     elif prev['ema_20'] > prev['ema_50'] and ult['ema_20'] < ult['ema_50']:
         senal = 'VENTA'
         prob = 75
-    # Bandas de Bollinger + RSI
+    # Regla 2: Bandas de Bollinger + RSI
     elif ult['close'] <= ult['BBL'] and ult['rsi'] < 30:
         senal = 'COMPRA'
         prob = 80
@@ -286,24 +311,22 @@ def detectar_senal(df):
         senal = 'VENTA'
         prob = 80
 
-    # Ajuste por volumen
+    # Ajuste de probabilidad por Volumen
     if senal and ult['volume_ratio'] > 1.3:
         prob = min(95, prob + 10)
 
     return senal, int(prob)
 
-# ============================================
-# FUNCIÓN DE ANÁLISIS DE ACTIVOS (INDIVIDUAL)
-# ============================================
 def analizar_activo(activo, connector):
+    """Función principal que orquesta el análisis de un solo activo."""
     df = connector.obtener_velas(activo, intervalo=5, limite=100)
     if df is None:
         return None
     df = calcular_indicadores(df)
     if df is None:
         return None
-    score = generar_score(df)
-    senal, prob = detectar_senal(df)
+    score = generar_score_ia(df)
+    senal, prob = detectar_senal_y_prob(df)
     ult = df.iloc[-1] if len(df) > 0 else None
     if ult is None:
         return None
@@ -319,10 +342,11 @@ def analizar_activo(activo, connector):
         'df': df
     }
 
-# ============================================
-# FUNCIÓN PARA ACTUALIZAR TOP 4 (SIN REPETIR)
-# ============================================
 def actualizar_top_activos(connector, mercado, max_activos=50):
+    """
+    Escanea la lista de activos, los analiza y devuelve los 4 mejores.
+    Implementa la rotación automática.
+    """
     activos_lista = connector.obtener_activos_disponibles(mercado, max_activos)
     if not activos_lista:
         return []
@@ -330,15 +354,14 @@ def actualizar_top_activos(connector, mercado, max_activos=50):
     progreso = st.progress(0)
     total = len(activos_lista)
     for i, activo in enumerate(activos_lista):
-        # Pequeña pausa para no exceder límites de API
-        time.sleep(0.1)
+        time.sleep(0.1)  # Pausa para no saturar la API
         res = analizar_activo(activo, connector)
         if res:
             resultados.append(res)
         progreso.progress((i + 1) / total)
     progreso.empty()
 
-    # Eliminar duplicados por si acaso (no debería haber, pero por seguridad)
+    # Eliminar duplicados por seguridad (no debería haber)
     vistos = set()
     resultados_unicos = []
     for r in resultados:
@@ -346,19 +369,17 @@ def actualizar_top_activos(connector, mercado, max_activos=50):
             vistos.add(r['activo'])
             resultados_unicos.append(r)
 
-    # Ordenar por score descendente
+    # Ordenar por score (IA) y devolver los 4 mejores
     resultados_unicos.sort(key=lambda x: x['score'], reverse=True)
     return resultados_unicos[:4]
 
-# ============================================
-# INTERFAZ PRINCIPAL
-# ============================================
+# === INTERFAZ PRINCIPAL DE STREAMLIT ===
 def main():
     st.title("📊 IQ OPTION PRO SCANNER")
-    st.markdown("#### Sistema de detección de oportunidades - 4 Mejores Activos en Tiempo Real")
+    st.markdown("#### Sistema Automatizado de Detección de Oportunidades (4 Mejores Activos)")
     st.markdown("---")
 
-    # Inicializar estado de sesión
+    # Inicializar el estado de la sesión
     if 'connector' not in st.session_state:
         st.session_state.connector = IQOptionConnector()
     if 'conectado' not in st.session_state:
@@ -370,17 +391,17 @@ def main():
     if 'mercado_actual' not in st.session_state:
         st.session_state.mercado_actual = "otc"
 
-    # Barra lateral - Login y controles
+    # --- BARRA LATERAL (LOGIN Y CONFIGURACIÓN) ---
     with st.sidebar:
         st.image("https://i.imgur.com/6QhQx8L.png", width=200)
-        st.markdown("### 🔐 Acceso IQ Option")
+        st.markdown("### 🔐 Acceso a IQ Option")
 
         if not st.session_state.conectado:
             email = st.text_input("Correo electrónico", placeholder="usuario@email.com")
             password = st.text_input("Contraseña", type="password", placeholder="••••••••")
             tipo_cuenta = st.selectbox("Tipo de cuenta", ["PRACTICE", "REAL"])
 
-            if st.button("🔌 Conectar", use_container_width=True):
+            if st.button("🔌 Conectar a IQ Option", use_container_width=True):
                 if email and password:
                     with st.spinner("Conectando..."):
                         ok, msg = st.session_state.connector.conectar(email, password)
@@ -390,9 +411,9 @@ def main():
                             st.success(f"✅ Conectado - Saldo: ${st.session_state.connector.obtener_saldo():.2f}")
                             st.rerun()
                         else:
-                            st.error(f"❌ Error: {msg}")
+                            st.error(f"❌ Error de conexión: {msg}")
                 else:
-                    st.warning("Ingresa credenciales")
+                    st.warning("Ingresa tus credenciales.")
         else:
             st.success(f"✅ Conectado")
             saldo = st.session_state.connector.obtener_saldo()
@@ -406,17 +427,21 @@ def main():
         st.markdown("---")
 
         if st.session_state.conectado:
-            st.markdown("### ⚙️ Configuración")
+            st.markdown("### ⚙️ Configuración del Análisis")
+
+            # SELECTOR DE MERCADO (NORMAL / OTC)
             mercado = st.radio(
-                "Mercado a analizar",
-                ["🌙 OTC (Fin de semana)", "📊 Normal (Forex)"],
-                index=0
+                "Tipo de Mercado:",
+                ["🌙 OTC (Fin de Semana / 24/7)", "📊 Normal (Forex - Horario de Mercado)"],
+                index=0,
+                horizontal=True
             )
             mercado_key = "otc" if "OTC" in mercado else "forex"
             st.session_state.mercado_actual = mercado_key
 
-            if st.button("🔍 ESCANEAR TOP 4", use_container_width=True):
-                with st.spinner("Analizando activos..."):
+            # BOTÓN DE ESCANEO PRINCIPAL
+            if st.button("🔍 ANALIZAR Y ENCONTRAR TOP 4", use_container_width=True):
+                with st.spinner("Analizando activos en tiempo real..."):
                     top = actualizar_top_activos(
                         st.session_state.connector,
                         mercado_key,
@@ -425,31 +450,31 @@ def main():
                     st.session_state.top_activos = top
                     st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
                     if top:
-                        st.success(f"✅ Análisis completado: {len(top)} activos encontrados")
+                        st.success(f"✅ Análisis completado. Se encontraron {len(top)} activos de alto potencial.")
                     else:
-                        st.warning("No se encontraron activos con datos suficientes")
+                        st.warning("No se encontraron activos con suficientes datos.")
                     st.rerun()
 
-    # Verificar conexión
+    # --- VERIFICAR CONEXIÓN INICIAL ---
     if not st.session_state.conectado:
-        st.info("👆 Conéctate a IQ Option en la barra lateral para comenzar")
-        # Mostrar 4 tarjetas vacías
+        st.info("👆 Conéctate a IQ Option en la barra lateral para comenzar.")
+        # Mostrar 4 tarjetas de ejemplo (placeholders)
         cols = st.columns(4)
         for i in range(4):
             with cols[i]:
                 st.markdown("""
                 <div class="asset-card">
                     <div class="asset-name">Esperando conexión...</div>
-                    <div class="asset-status">⏳ Conéctate para ver datos</div>
+                    <div class="asset-price">---</div>
                 </div>
                 """, unsafe_allow_html=True)
         return
 
-    # Botón de actualización manual y timestamp
-    col1, col2, col3 = st.columns([1, 2, 1])
+    # --- BOTÓN DE ACTUALIZACIÓN MANUAL Y TIMESTAMP ---
+    col1, col2, col3 = st.columns([1.5, 2, 1.5])
     with col1:
-        if st.button("🔄 ACTUALIZAR ANÁLISIS", use_container_width=True):
-            with st.spinner("Actualizando..."):
+        if st.button("🔄 ACTUALIZAR ANÁLISIS AHORA", use_container_width=True):
+            with st.spinner("Refrescando datos de mercado..."):
                 top = actualizar_top_activos(
                     st.session_state.connector,
                     st.session_state.mercado_actual,
@@ -461,26 +486,26 @@ def main():
 
     with col3:
         if st.session_state.ultima_actualizacion:
-            st.caption(f"Última actualización: {st.session_state.ultima_actualizacion.strftime('%H:%M:%S')}")
+            st.caption(f"Último análisis: {st.session_state.ultima_actualizacion.strftime('%H:%M:%S')}")
 
     st.markdown("---")
 
-    # Mostrar las 4 tarjetas (siempre 4)
-    st.subheader("🔥 TOP 4 ACTIVOS CON MAYOR POTENCIAL")
+    # --- MOSTRAR LAS 4 TARJETAS DE ACTIVOS (TOP 4) ---
+    st.subheader("🔥 TOP 4 ACTIVOS CON MAYOR PROBABILIDAD DE ÉXITO")
 
     if not st.session_state.top_activos:
-        st.warning("No hay datos disponibles. Presiona 'ESCANEAR TOP 4' en la barra lateral.")
+        st.warning("Presiona 'ANALIZAR Y ENCONTRAR TOP 4' en la barra lateral para obtener resultados.")
         cols = st.columns(4)
         for i in range(4):
             with cols[i]:
                 st.markdown("""
                 <div class="asset-card">
                     <div class="asset-name">Cargando...</div>
-                    <div class="asset-status">⏳ Escanea para ver datos</div>
+                    <div class="asset-price">Escanea para ver datos</div>
                 </div>
                 """, unsafe_allow_html=True)
     else:
-        # Asegurar que siempre se muestren 4 tarjetas (rellenar con placeholders si es necesario)
+        # Asegurar que siempre se muestren 4 tarjetas (rellenar con placeholders si son menos)
         activos_mostrar = st.session_state.top_activos.copy()
         while len(activos_mostrar) < 4:
             activos_mostrar.append(None)
@@ -497,46 +522,49 @@ def main():
                 if activo is None:
                     st.markdown("""
                     <div class="asset-card" style="opacity:0.5;">
-                        <div class="asset-name">Esperando...</div>
-                        <div class="asset-status">⏳ Nuevo activo pronto</div>
+                        <div class="asset-name">En espera...</div>
+                        <div class="asset-price">Próximo activo potencial</div>
                     </div>
                     """, unsafe_allow_html=True)
                 else:
                     # Determinar estilo de señal
                     if activo['senal'] == 'COMPRA':
                         signal_class = "signal-compra"
-                        signal_text = f"📈 {activo['senal']} - {activo['probabilidad']}%"
-                        color_prob = "#00c864"
+                        signal_text = f"📈 {activo['senal']}"
+                        color_prob = "#00C864"
                     elif activo['senal'] == 'VENTA':
                         signal_class = "signal-venta"
-                        signal_text = f"📉 {activo['senal']} - {activo['probabilidad']}%"
-                        color_prob = "#ff4646"
+                        signal_text = f"📉 {activo['senal']}"
+                        color_prob = "#FF4646"
                     else:
                         signal_class = "signal-neutral"
                         signal_text = "⚪ NEUTRAL"
-                        color_prob = "#9ca3af"
+                        color_prob = "#9CA3AF"
+
+                    # Formatear nombre del activo para mostrar
+                    nombre_activo = activo['activo'].replace("-OTC", "")
 
                     st.markdown(f"""
                     <div class="asset-card">
-                        <div class="asset-name">{activo['activo']}</div>
-                        <div class="asset-status">Score: {activo['score']} | RSI: {activo['rsi']:.1f}</div>
+                        <div class="asset-name">{nombre_activo}</div>
+                        <div class="asset-price">Precio: {activo['precio']:.5f} | RSI: {activo['rsi']:.1f}</div>
                         <div class="asset-signal {signal_class}">{signal_text}</div>
-                        <div class="asset-prob" style="color: {color_prob};">{activo['probabilidad']}% probabilidad</div>
-                        <div class="asset-time">
-                            ⏰ Entrada: {tiempo_entrada.strftime('%H:%M')}<br>
-                            ⏳ Vencimiento: {tiempo_salida.strftime('%H:%M')}
+                        <div class="asset-prob" style="color: {color_prob};">{activo['probabilidad']}%</div>
+                        <div class="asset-footer">
+                            <span>⏰ {tiempo_entrada.strftime('%H:%M')}</span>
+                            <span>⏳ {tiempo_salida.strftime('%H:%M')}</span>
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # Activo principal (el mejor) - gráfico detallado
+    # --- ACTIVO PRINCIPAL (EL #1) - GRÁFICO DETALLADO ---
     if st.session_state.top_activos:
         mejor = st.session_state.top_activos[0]
-        st.subheader(f"📈 Análisis Detallado: {mejor['activo']}")
+        st.subheader(f"📈 Análisis en Profundidad: {mejor['activo'].replace('-OTC', '')} (Activo Principal)")
 
-        # Alerta anticipada (1 minuto antes)
+        # ALERTA ANTICIPADA (1 MINUTO ANTES)
         ahora = datetime.now(ecuador_tz)
         minutos = ahora.minute
         minuto_base = (minutos // 5) * 5
@@ -546,25 +574,25 @@ def main():
         if mejor['senal'] and segundos_restantes <= 60 and segundos_restantes > 0:
             st.markdown(f"""
             <div class="alert-box">
-                <h3 style="color:#ffaa00; margin:0;">⚠️ SEÑAL CONFIRMADA - 1 MINUTO DE ANTICIPACIÓN</h3>
-                <p style="font-size:18px; margin:10px 0 0 0;">
-                    <strong>{mejor['activo']}</strong> - {mejor['senal']} a las {tiempo_entrada.strftime('%H:%M')} - 
-                    Vencimiento {(tiempo_entrada+timedelta(minutes=5)).strftime('%H:%M')} - Probabilidad {mejor['probabilidad']}%
+                <h3 style="color:#FFAA00; margin:0;">⚠️ SEÑAL CONFIRMADA - 1 MINUTO DE ANTICIPACIÓN</h3>
+                <p style="font-size:1.2rem; margin:10px 0 0 0;">
+                    <strong>{mejor['activo'].replace('-OTC', '')}</strong> - {mejor['senal']} a las {tiempo_entrada.strftime('%H:%M')}<br>
+                    Vencimiento: {(tiempo_entrada+timedelta(minutes=5)).strftime('%H:%M')} | Probabilidad: {mejor['probabilidad']}%
                 </p>
             </div>
             """, unsafe_allow_html=True)
 
-        # Gráfico con Plotly
+        # GRÁFICO CON PLOTLY (Velas, EMAs, Bandas de Bollinger, RSI, Volumen)
         if mejor['df'] is not None and len(mejor['df']) > 20:
             df_graf = mejor['df'].iloc[-50:].copy()
             fig = make_subplots(
                 rows=3, cols=1,
                 shared_xaxes=True,
-                vertical_spacing=0.05,
+                vertical_spacing=0.06,
                 row_heights=[0.6, 0.2, 0.2],
-                subplot_titles=("Precio", "RSI", "Volumen")
+                subplot_titles=("Precio con EMAs y BB", "RSI (14)", "Volumen Relativo")
             )
-            # Velas
+            # Gráfico de velas
             fig.add_trace(go.Candlestick(
                 x=df_graf.index,
                 open=df_graf['open'],
@@ -572,62 +600,64 @@ def main():
                 low=df_graf['low'],
                 close=df_graf['close'],
                 name="",
-                increasing_line_color='#00c864',
-                decreasing_line_color='#ff4646'
+                increasing_line_color='#00C864',
+                decreasing_line_color='#FF4646',
+                showlegend=False
             ), row=1, col=1)
             # EMAs
             fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_20'],
-                                      line=dict(color='#2962ff', width=2), name="EMA 20"), row=1, col=1)
+                                      line=dict(color='#2962FF', width=2.5), name="EMA 20"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_50'],
-                                      line=dict(color='#ffaa00', width=2), name="EMA 50"), row=1, col=1)
+                                      line=dict(color='#FFAA00', width=2.5), name="EMA 50"), row=1, col=1)
             # Bandas de Bollinger
             fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['BBU'],
-                                      line=dict(color='#888', dash='dash'), name="BB Sup"), row=1, col=1)
+                                      line=dict(color='#AAAAAA', dash='dash'), name="BB Sup"), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['BBL'],
-                                      line=dict(color='#888', dash='dash'), name="BB Inf"), row=1, col=1)
+                                      line=dict(color='#AAAAAA', dash='dash'), name="BB Inf"), row=1, col=1)
             # RSI
             fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['rsi'],
-                                      line=dict(color='white', width=2), name="RSI"), row=2, col=1)
-            fig.add_hline(y=70, line_dash="dash", line_color="red", row=2)
-            fig.add_hline(y=30, line_dash="dash", line_color="#00c864", row=2)
+                                      line=dict(color='#FFFFFF', width=2), name="RSI"), row=2, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="#FF4646", row=2)
+            fig.add_hline(y=30, line_dash="dash", line_color="#00C864", row=2)
             # Volumen
-            colors_vol = ['#00c864' if df_graf['close'].iloc[i] >= df_graf['close'].iloc[i-1]
-                         else '#ff4646' for i in range(1, len(df_graf))]
-            colors_vol.insert(0, '#00c864')
+            colors_vol = ['#00C864' if df_graf['close'].iloc[i] >= df_graf['close'].iloc[i-1]
+                         else '#FF4646' for i in range(1, len(df_graf))]
+            colors_vol.insert(0, '#00C864')
             fig.add_trace(go.Bar(x=df_graf.index, y=df_graf['volume'],
                                   marker_color=colors_vol, name="Volumen"), row=3, col=1)
 
             fig.update_layout(
                 height=700,
                 template="plotly_dark",
-                paper_bgcolor="#131722",
-                plot_bgcolor="#131722",
-                font_color="#d1d4dc",
+                paper_bgcolor="#0F1217",
+                plot_bgcolor="#0F1217",
+                font_color="#E5E7EB",
                 hovermode="x unified",
-                showlegend=False
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
-            fig.update_xaxes(gridcolor="#2a2e39")
-            fig.update_yaxes(gridcolor="#2a2e39")
+            fig.update_xaxes(gridcolor="#2A303C")
+            fig.update_yaxes(gridcolor="#2A303C")
             st.plotly_chart(fig, use_container_width=True)
 
-            # Panel de detalles
+            # Métricas clave del activo principal
             st.subheader("🔍 Detalles del Activo Principal")
             ult = mejor['df'].iloc[-1]
-            cols = st.columns(4)
-            with cols[0]:
-                st.metric("Precio", f"{ult['close']:.5f}")
-            with cols[1]:
-                st.metric("RSI", f"{ult['rsi']:.2f}")
-            with cols[2]:
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Precio Actual", f"{ult['close']:.5f}")
+            with col2:
+                st.metric("RSI (14)", f"{ult['rsi']:.2f}")
+            with col3:
                 st.metric("Volatilidad", f"{ult['volatilidad']:.2f}%")
-            with cols[3]:
-                st.metric("Volumen Ratio", f"{ult['volume_ratio']:.2f}x")
+            with col4:
+                st.metric("Volumen (Ratio)", f"{ult['volume_ratio']:.2f}x")
         else:
-            st.warning("Datos insuficientes para gráfico detallado")
+            st.warning("Datos históricos insuficientes para mostrar el gráfico.")
 
-    # Modo replay (opcional)
+    # --- MODO REPLAY (Para pruebas) ---
     st.markdown("---")
-    if st.button("🎮 Modo Replay (Siguiente vela)"):
+    if st.button("🎮 Modo Replay (Simular Siguiente Vela)", use_container_width=True):
         st.session_state.ultima_actualizacion = None
         st.rerun()
 
