@@ -1,7 +1,8 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN CORREGIDA
-- Mantiene la conexión original que funcionaba
-- Estrategias mejoradas y vencimiento variable
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN CON UMBRALES DE VOLUMEN ADAPTATIVOS
+- Operaciones de 1 minuto: umbrales de volumen según fuerza de tendencia (0.4x, 0.7x, 1.5x)
+- Filtro de continuidad de tendencia (pendiente EMA20 y posición del precio)
+- Operaciones de 5 minutos: lógica de retrocesos intacta
 """
 
 import streamlit as st
@@ -43,7 +44,7 @@ st.set_page_config(
 # Autorefresh cada 5 segundos
 st_autorefresh(interval=5000, key="autorefresh")
 
-# CSS personalizado (igual)
+# CSS personalizado (mantenemos el mismo)
 st.markdown("""
 <style>
     @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css');
@@ -365,6 +366,8 @@ def detectar_tendencia(df):
 
     if direccion == 'lateral':
         return 'lateral', 0, 'lateral'
+    elif fuerza >= 90:
+        return direccion, min(100, fuerza), 'extremadamente fuerte'
     elif fuerza >= 75:
         return direccion, min(100, fuerza), 'muy fuerte'
     elif fuerza >= 55:
@@ -471,7 +474,7 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
         return 0, 0
 
 # ============================================
-# DETECCIÓN DE RETROCESO Y DECISIÓN DE VENCIMIENTO (MEJORADA)
+# DETECCIÓN DE RETROCESO Y DECISIÓN DE VENCIMIENTO (VERSIÓN MEJORADA CON UMBRALES DE VOLUMEN)
 # ============================================
 def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
     """
@@ -483,19 +486,27 @@ def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
     ult = df.iloc[-1]
     soportes, resistencias = detectar_soportes_resistencias(df)
 
-    # Filtro de consistencia
-    pendiente_larga = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-10]) / 10
-    if tendencia == 'alcista' and pendiente_larga <= 0:
-        return False, 5
-    if tendencia == 'bajista' and pendiente_larga >= 0:
-        return False, 5
-
+    # --- Filtros generales de seguridad ---
+    # Evitar RSI extremo
     if ult['rsi'] > 75 or ult['rsi'] < 25:
         return False, 5
 
-    # Decisión de vencimiento basada en fuerza y volumen
-    if fuerza >= 75:
-        if ult['volume_ratio'] >= 1.0:
+    # Verificar continuidad de la tendencia (pendiente EMA20 en últimos 5 periodos)
+    pendiente_corta = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
+    if tendencia == 'alcista' and (pendiente_corta <= 0 or ult['close'] <= ult['ema_20']):
+        return False, 5
+    if tendencia == 'bajista' and (pendiente_corta >= 0 or ult['close'] >= ult['ema_20']):
+        return False, 5
+
+    # --- Decisión para operaciones de 1 minuto (basada en fuerza y volumen) ---
+    if fuerza >= 90:
+        if ult['volume_ratio'] >= 0.4:
+            cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
+            cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
+            if not cerca_soporte and not cerca_resistencia:
+                return False, 1
+    elif 75 <= fuerza < 90:
+        if ult['volume_ratio'] >= 0.7:
             cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
             cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
             if not cerca_soporte and not cerca_resistencia:
@@ -507,7 +518,7 @@ def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
             if not cerca_soporte and not cerca_resistencia:
                 return False, 1
 
-    # Lógica de retroceso para 5 minutos
+    # --- Lógica de retroceso para operaciones de 5 minutos (sin cambios) ---
     if tendencia == 'alcista':
         soporte_cercano = min([s for s in soportes if s < ult['close']], default=None)
         if soporte_cercano and (ult['close'] - soporte_cercano) < 0.002 * ult['close']:
@@ -757,7 +768,7 @@ def ciclo_principal(connector, manager, config):
 # ============================================
 def main():
     st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### Modo autónomo con vencimiento variable (1/5 min) | Conexión estable")
+    st.markdown("#### Modo autónomo con vencimiento variable (1/5 min) | Umbrales de volumen adaptativos")
     st.markdown("---")
 
     # Inicializar estado de sesión
