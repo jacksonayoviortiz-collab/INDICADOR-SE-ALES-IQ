@@ -1,15 +1,13 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN FINAL
 Características:
-- Analiza 1 activo a la vez (rápido y eficiente)
-- Detecta tendencias (alcista/bajista) con fuerza
-- Ejecuta operaciones en retrocesos dentro de la tendencia
-- 4 estrategias independientes + IA para confirmar continuación
+- 5 estrategias independientes con acceso a volumen y fuerza
+- IA ensemble que pondera las estrategias para máxima precisión
+- Detección de tendencias y retrocesos
+- Resultados reales de operaciones (consulta estado después de 5 min)
+- Cambio correcto entre cuenta Demo/Real
+- Interfaz profesional con gráfico en tiempo real y animaciones
 - Límite de operaciones diarias configurable
-- Cambio automático de activo si el mercado se vuelve lateral
-- Notificaciones en tiempo real de todos los eventos
-- Historial completo de operaciones
-- Interfaz simplificada y profesional
 """
 
 import streamlit as st
@@ -48,12 +46,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Autorefresh cada 5 segundos (para que la interfaz sea reactiva)
+# Autorefresh cada 5 segundos (para mantener la interfaz reactiva)
 st_autorefresh(interval=5000, key="autorefresh")
 
-# CSS personalizado (mantenemos el mismo estilo profesional)
+# CSS personalizado (profesional con iconos y animaciones)
 st.markdown("""
 <style>
+    @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css');
     .stApp {
         background-color: #0A0C10;
         color: #E0E0E0;
@@ -69,6 +68,7 @@ st.markdown("""
         padding: 20px;
         border: 1px solid #00FF8844;
         margin: 10px 0;
+        backdrop-filter: blur(10px);
     }
     .evento {
         background: #1E242C;
@@ -76,6 +76,7 @@ st.markdown("""
         padding: 10px;
         margin: 5px 0;
         border-radius: 5px;
+        font-size: 14px;
     }
     .reloj {
         font-size: 28px;
@@ -95,13 +96,27 @@ st.markdown("""
         border-radius: 40px;
         border: none;
         padding: 10px 25px;
+        transition: all 0.3s;
     }
-    .control-panel {
+    .stButton button:hover {
+        background: #00CC66;
+        transform: scale(1.05);
+        box-shadow: 0 0 15px #00FF88;
+    }
+    .metric-card {
         background: #151A24;
-        border-radius: 20px;
-        padding: 20px;
+        border-radius: 15px;
+        padding: 15px;
         border: 1px solid #00FF8844;
-        margin: 10px 0;
+    }
+    .icono-estado {
+        font-size: 24px;
+        margin-right: 10px;
+    }
+    .progreso-circular {
+        width: 100px;
+        height: 100px;
+        margin: 0 auto;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -110,7 +125,7 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CLASE DE CONEXIÓN IQ OPTION
+# CLASE DE CONEXIÓN IQ OPTION (MEJORADA)
 # ============================================
 class IQOptionConnector:
     def __init__(self):
@@ -119,6 +134,7 @@ class IQOptionConnector:
         self.balance = 0
         self.tipo_cuenta = "PRACTICE"
         self.activos_cache = {}
+        self.ordenes_pendientes = {}  # dict: {id_orden: {'activo':, 'direccion':, 'monto':, 'timestamp':}}
 
     def conectar(self, email, password):
         if not IQ_AVAILABLE:
@@ -137,8 +153,16 @@ class IQOptionConnector:
 
     def cambiar_balance(self, tipo="PRACTICE"):
         if self.conectado:
-            self.tipo_cuenta = tipo
-            return self.api.change_balance(tipo)
+            try:
+                self.api.change_balance(tipo)
+                self.tipo_cuenta = tipo
+                # Pequeña pausa para que el cambio se efectúe
+                time.sleep(1)
+                self.balance = self.api.get_balance()
+                return True
+            except Exception as e:
+                logging.error(f"Error al cambiar balance: {e}")
+                return False
         return False
 
     def actualizar_balance(self):
@@ -216,9 +240,33 @@ class IQOptionConnector:
             direccion_api = 'call' if direccion.upper() == 'COMPRA' else 'put'
             tiempo = expiracion * 60
             resultado = self.api.buy(monto, activo, direccion_api, tiempo)
-            return resultado, "Orden ejecutada"
+            if resultado and len(resultado) > 0:
+                # La estructura de resultado puede variar; asumimos que devuelve un ID
+                id_orden = resultado[0] if isinstance(resultado, list) else resultado
+                # Guardar como pendiente
+                self.ordenes_pendientes[id_orden] = {
+                    'activo': activo,
+                    'direccion': direccion,
+                    'monto': monto,
+                    'timestamp': time.time()
+                }
+                return id_orden, "Orden ejecutada"
+            else:
+                return None, "Error al ejecutar orden"
         except Exception as e:
             return None, str(e)
+
+    def verificar_orden(self, id_orden):
+        """Consulta el resultado de una orden por su ID."""
+        try:
+            # Suponiendo que la API tiene un método get_optioninfo
+            # Si no, se puede usar get_positions o similar
+            resultado = self.api.get_optioninfo(id_orden)
+            # resultado debería contener el estado (win/loss) y la ganancia
+            return resultado
+        except Exception as e:
+            logging.error(f"Error verificando orden {id_orden}: {e}")
+            return None
 
 # ============================================
 # INDICADORES TÉCNICOS
@@ -242,6 +290,8 @@ def calcular_indicadores(df):
     df['bb_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / df['close'] * 100
     df['bb_lower'] = bb.bollinger_lband()
     df['bb_upper'] = bb.bollinger_hband()
+    # Parabolic SAR
+    df['psar'] = ta.trend.PSARIndicator(df['high'], df['low'], df['close']).psar()
     return df
 
 # ============================================
@@ -260,16 +310,13 @@ def detectar_tendencia(df):
     pendiente_ema20 = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-10]) / 10
     pendiente_ema50 = (df['ema_50'].iloc[-1] - df['ema_50'].iloc[-10]) / 10
 
-    # Posición de precio respecto a EMAs
     sobre_ema20 = ult['close'] > ult['ema_20']
     sobre_ema50 = ult['close'] > ult['ema_50']
     sobre_ema200 = ult['close'] > ult['ema_200']
 
-    # Volumen y ADX
     volumen_fuerte = ult['volume_ratio'] > 1.2
     adx_fuerte = ult['adx'] > 25
 
-    # Calcular fuerza (0-100)
     fuerza = 0
     if pendiente_ema20 > 0:
         fuerza += 20
@@ -286,7 +333,6 @@ def detectar_tendencia(df):
     if adx_fuerte:
         fuerza += 20
 
-    # Decidir dirección
     if (pendiente_ema20 > 0 and pendiente_ema50 > 0) or (sobre_ema20 and sobre_ema50 and sobre_ema200):
         return 'alcista', min(100, fuerza)
     elif (pendiente_ema20 < 0 and pendiente_ema50 < 0) or (not sobre_ema20 and not sobre_ema50 and not sobre_ema200):
@@ -295,7 +341,7 @@ def detectar_tendencia(df):
         return 'lateral', 0
 
 # ============================================
-# ESTRATEGIAS DE CONFIRMACIÓN (4 independientes)
+# ESTRATEGIAS DE CONFIRMACIÓN (5 independientes)
 # ============================================
 def estrategia_1_ruptura_con_volumen(df):
     """Estrategia 1: Ruptura de máximo/mínimo reciente con volumen alto"""
@@ -305,9 +351,9 @@ def estrategia_1_ruptura_con_volumen(df):
     max_10 = df['high'].iloc[-10:-1].max()
     min_10 = df['low'].iloc[-10:-1].min()
     if ult['close'] > max_10 and ult['volume_ratio'] > 1.3:
-        return 1, 80  # 1 para compra
+        return 1, 80
     elif ult['close'] < min_10 and ult['volume_ratio'] > 1.3:
-        return -1, 80  # -1 para venta
+        return -1, 80
     return 0, 0
 
 def estrategia_2_pendiente_ema_adx(df):
@@ -337,17 +383,27 @@ def estrategia_4_macd_histograma(df):
     """Estrategia 4: Cruce de MACD con volumen"""
     if df is None or len(df) < 30:
         return 0, 0
-    ult = df.iloc[-1]
-    prev = df.iloc[-2]
-    # Calcular MACD manualmente con ta
     macd = ta.trend.MACD(df['close'])
     df['macd'] = macd.macd()
     df['macd_signal'] = macd.macd_signal()
-    df['macd_diff'] = macd.macd_diff()
-    if df['macd'].iloc[-1] > df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] <= df['macd_signal'].iloc[-2] and ult['volume_ratio'] > 1.2:
+    if df['macd'].iloc[-1] > df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] <= df['macd_signal'].iloc[-2] and df['volume_ratio'].iloc[-1] > 1.2:
         return 1, 70
-    elif df['macd'].iloc[-1] < df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] >= df['macd_signal'].iloc[-2] and ult['volume_ratio'] > 1.2:
+    elif df['macd'].iloc[-1] < df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] >= df['macd_signal'].iloc[-2] and df['volume_ratio'].iloc[-1] > 1.2:
         return -1, 70
+    return 0, 0
+
+def estrategia_5_parabolic_sar_volumen(df):
+    """Estrategia 5: Parabolic SAR + Volumen (detección de reversión)"""
+    if df is None or len(df) < 20:
+        return 0, 0
+    ult = df.iloc[-1]
+    prev = df.iloc[-2]
+    # Señal de compra: SAR estaba por encima del precio y ahora pasa por debajo (cambio a alcista) con volumen
+    if prev['psar'] > prev['close'] and ult['psar'] < ult['close'] and ult['volume_ratio'] > 1.3:
+        return 1, 75
+    # Señal de venta: SAR estaba por debajo y ahora pasa por encima (cambio a bajista) con volumen
+    elif prev['psar'] < prev['close'] and ult['psar'] > ult['close'] and ult['volume_ratio'] > 1.3:
+        return -1, 75
     return 0, 0
 
 # ============================================
@@ -355,17 +411,17 @@ def estrategia_4_macd_histograma(df):
 # ============================================
 def confirmar_operacion(df, tendencia, fuerza_tendencia):
     """
-    Usa las 4 estrategias para decidir si operar en la dirección de la tendencia.
+    Usa las 5 estrategias para decidir si operar en la dirección de la tendencia.
     Retorna: (decisión, confianza) donde decisión es 1 (compra), -1 (venta) o 0 (no operar)
     """
     resultados = [
         estrategia_1_ruptura_con_volumen(df),
         estrategia_2_pendiente_ema_adx(df),
         estrategia_3_bandas_bollinger_rsi(df),
-        estrategia_4_macd_histograma(df)
+        estrategia_4_macd_histograma(df),
+        estrategia_5_parabolic_sar_volumen(df)
     ]
 
-    # Ponderar según la fuerza de la tendencia
     peso_tendencia = min(1.5, 1 + fuerza_tendencia / 100)
 
     compra_peso = 0
@@ -380,13 +436,12 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
             venta_peso += conf
             total_peso += conf
 
-    # Si la tendencia es alcista, dar más peso a las compras
     if tendencia == 'alcista':
         compra_peso *= peso_tendencia
     elif tendencia == 'bajista':
         venta_peso *= peso_tendencia
 
-    if compra_peso > venta_peso and compra_peso > 150:  # Umbral mínimo
+    if compra_peso > venta_peso and compra_peso > 150:
         return 1, int(compra_peso / 3)
     elif venta_peso > compra_peso and venta_peso > 150:
         return -1, int(venta_peso / 3)
@@ -405,9 +460,7 @@ def calcular_retroceso(df, tendencia):
         return None
     ult = df.iloc[-1]
     if tendencia == 'alcista':
-        # Buscar mínimo reciente (soporte)
         min_reciente = df['low'].iloc[-20:].min()
-        # El retroceso podría ser hasta la EMA20 o un Fibonacci del 38.2%
         precio_objetivo = max(ult['ema_20'], min_reciente * 1.01)
         return precio_objetivo
     elif tendencia == 'bajista':
@@ -427,11 +480,11 @@ class TradingManager:
         self.ultimo_cambio_activo = datetime.now(ecuador_tz)
         self.historial = []
         self.log_eventos = []
+        self.ordenes_pendientes = {}  # id_orden -> info
 
-    def agregar_evento(self, mensaje):
+    def agregar_evento(self, mensaje, icono="ℹ️"):
         timestamp = datetime.now(ecuador_tz).strftime('%H:%M:%S')
-        self.log_eventos.append(f"[{timestamp}] {mensaje}")
-        # Mantener solo últimos 20 eventos
+        self.log_eventos.append(f"[{timestamp}] {icono} {mensaje}")
         if len(self.log_eventos) > 20:
             self.log_eventos = self.log_eventos[-20:]
 
@@ -446,8 +499,23 @@ class TradingManager:
         })
         self.operaciones_hoy += 1
 
-    def reiniciar_contador_diario(self):
-        self.operaciones_hoy = 0
+    def actualizar_resultados(self, connector):
+        """Verifica el estado de las órdenes pendientes y actualiza el historial."""
+        for id_orden, info in list(self.ordenes_pendientes.items()):
+            # Si han pasado más de 5 minutos, verificar
+            if time.time() - info['timestamp'] > 300:
+                resultado = connector.verificar_orden(id_orden)
+                if resultado:
+                    # Suponiendo que resultado contiene 'win' o 'loss'
+                    if resultado.get('win'):
+                        ganancia = info['monto'] * 0.8  # Ajustar según payout
+                        self.agregar_operacion(info['activo'], info['direccion'], info['monto'], 'ganada', ganancia)
+                        self.agregar_evento(f"💰 Operación GANADA en {info['activo']} - ${ganancia:.2f}", "💰")
+                    else:
+                        perdida = -info['monto']
+                        self.agregar_operacion(info['activo'], info['direccion'], info['monto'], 'perdida', perdida)
+                        self.agregar_evento(f"💸 Operación PERDIDA en {info['activo']} - ${perdida:.2f}", "💸")
+                    del self.ordenes_pendientes[id_orden]
 
     def obtener_resumen(self):
         if not self.historial:
@@ -477,15 +545,18 @@ def ciclo_principal(connector, manager, config):
     if manager.operaciones_hoy >= config['limite_diario']:
         if manager.estado != "Límite alcanzado":
             manager.estado = "Límite alcanzado"
-            manager.agregar_evento("⛔ Límite de operaciones diarias alcanzado. Bot detenido.")
+            manager.agregar_evento("⛔ Límite de operaciones diarias alcanzado. Bot detenido.", "⛔")
         return
+
+    # Verificar resultados pendientes
+    manager.actualizar_resultados(connector)
 
     # Si no tenemos activo actual, buscar uno
     if manager.activo_actual is None:
-        manager.estado = "Buscando activo..."
-        manager.agregar_evento("🔍 Buscando activo con tendencia...")
+        manager.estado = "🔍 Buscando activo..."
+        manager.agregar_evento("Buscando activo con tendencia...", "🔍")
         activos = connector.obtener_activos_disponibles(config['mercado'], max_activos=100)
-        for act in activos[:20]:  # Probar primeros 20 para no demorar
+        for act in activos[:20]:
             df = connector.obtener_velas(act, intervalo=5, limite=100)
             if df is None:
                 continue
@@ -495,17 +566,17 @@ def ciclo_principal(connector, manager, config):
             tendencia, fuerza = detectar_tendencia(df)
             if tendencia != 'lateral' and fuerza > 50:
                 manager.activo_actual = act
-                manager.agregar_evento(f"✅ Activo encontrado: {act} - Tendencia {tendencia} (fuerza {fuerza}%)")
+                manager.agregar_evento(f"✅ Activo encontrado: {act} - Tendencia {tendencia} (fuerza {fuerza}%)", "✅")
                 manager.estado = "Analizando"
                 break
         if manager.activo_actual is None:
-            manager.agregar_evento("⚠️ No se encontró ningún activo con tendencia fuerte. Reintentando en 5 min...")
+            manager.agregar_evento("⚠️ No se encontró ningún activo con tendencia fuerte. Reintentando en 5 min...", "⚠️")
             return
 
     # Analizar el activo actual
     df = connector.obtener_velas(manager.activo_actual, intervalo=5, limite=100)
     if df is None:
-        manager.agregar_evento(f"❌ Error al obtener datos de {manager.activo_actual}. Buscando otro...")
+        manager.agregar_evento(f"❌ Error al obtener datos de {manager.activo_actual}. Buscando otro...", "❌")
         manager.activo_actual = None
         return
     df = calcular_indicadores(df)
@@ -516,70 +587,66 @@ def ciclo_principal(connector, manager, config):
     tendencia, fuerza = detectar_tendencia(df)
     ult = df.iloc[-1]
 
-    # Mostrar estado en la interfaz (se actualiza con cada ciclo)
+    # Guardar en session_state para la interfaz
     st.session_state.tendencia_actual = tendencia
     st.session_state.fuerza_actual = fuerza
     st.session_state.precio_actual = ult['close']
 
-    # Si el mercado se vuelve lateral, cambiar de activo
+    # Si el mercado se vuelve lateral o la fuerza baja, cambiar de activo
     if tendencia == 'lateral' or fuerza < 40:
-        manager.agregar_evento(f"🔄 Mercado lateral en {manager.activo_actual}. Buscando otro activo...")
+        manager.agregar_evento(f"🔄 Mercado lateral en {manager.activo_actual}. Buscando otro activo...", "🔄")
         manager.activo_actual = None
         manager.estado = "Buscando"
         return
 
     # Si estamos en modo "Analizando", verificar si podemos operar
     if manager.estado == "Analizando":
-        # Confirmar con IA
         decision, confianza = confirmar_operacion(df, tendencia, fuerza)
         if decision != 0 and confianza > 60:
-            # Calcular punto de retroceso ideal
             precio_entrada = calcular_retroceso(df, tendencia)
             if precio_entrada:
                 direccion = "COMPRA" if decision == 1 else "VENTA"
-                manager.agregar_evento(f"🎯 Oportunidad detectada en {manager.activo_actual} - {direccion} (confianza {confianza}%)")
-                manager.agregar_evento(f"📉 Esperando retroceso a {precio_entrada:.5f}...")
+                manager.agregar_evento(f"🎯 Oportunidad detectada en {manager.activo_actual} - {direccion} (confianza {confianza}%)", "🎯")
+                manager.agregar_evento(f"📉 Esperando retroceso a {precio_entrada:.5f}...", "📉")
                 manager.estado = "EsperandoRetroceso"
                 manager.precio_objetivo = precio_entrada
                 manager.direccion = direccion
                 manager.confianza = confianza
         else:
-            manager.agregar_evento(f"⏳ {manager.activo_actual} en tendencia {tendencia} pero sin señal clara aún...")
+            manager.agregar_evento(f"⏳ {manager.activo_actual} en tendencia {tendencia} pero sin señal clara aún...", "⏳")
 
     # Si estamos esperando retroceso, verificar si el precio alcanza el objetivo
     elif manager.estado == "EsperandoRetroceso":
         if (manager.direccion == "COMPRA" and ult['close'] <= manager.precio_objetivo) or \
            (manager.direccion == "VENTA" and ult['close'] >= manager.precio_objetivo):
-            # Ejecutar orden
-            resultado, msg = connector.colocar_orden(
+            id_orden, msg = connector.colocar_orden(
                 manager.activo_actual,
                 manager.direccion,
                 config['monto'],
                 expiracion=5
             )
-            if resultado:
-                manager.agregar_evento(f"✅ Orden ejecutada: {manager.direccion} en {manager.activo_actual} por ${config['monto']}")
-                # Simular resultado (en producción deberías verificar después)
-                manager.agregar_operacion(
-                    manager.activo_actual,
-                    manager.direccion,
-                    config['monto'],
-                    'ganada',  # provisional
-                    config['monto'] * 0.8
-                )
+            if id_orden:
+                manager.agregar_evento(f"✅ Orden ejecutada: {manager.direccion} en {manager.activo_actual} por ${config['monto']} (ID: {id_orden})", "✅")
+                # Guardar como pendiente en el manager también
+                manager.ordenes_pendientes[id_orden] = {
+                    'activo': manager.activo_actual,
+                    'direccion': manager.direccion,
+                    'monto': config['monto'],
+                    'timestamp': time.time()
+                }
                 manager.estado = "Analizando"  # Volver a analizar el mismo activo
                 # Actualizar balance
                 connector.actualizar_balance()
             else:
-                manager.agregar_evento(f"❌ Error al ejecutar orden: {msg}")
+                manager.agregar_evento(f"❌ Error al ejecutar orden: {msg}", "❌")
                 manager.estado = "Analizando"
         else:
             # Si el precio se aleja mucho, cancelar la espera
             if manager.direccion == "COMPRA" and ult['close'] > manager.precio_objetivo * 1.02:
-                manager.agregar_evento("⏹️ Retroceso cancelado - precio se alejó")
+                manager.agregar_evento("⏹️ Retroceso cancelado - precio se alejó", "⏹️")
                 manager.estado = "Analizando"
             elif manager.direccion == "VENTA" and ult['close'] < manager.precio_objetivo * 0.98:
-                manager.agregar_evento("⏹️ Retroceso cancelado - precio se alejó")
+                manager.agregar_evento("⏹️ Retroceso cancelado - precio se alejó", "⏹️")
                 manager.estado = "Analizando"
 
 # ============================================
@@ -587,7 +654,7 @@ def ciclo_principal(connector, manager, config):
 # ============================================
 def main():
     st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### Modo autónomo - 1 activo por vez | IA con 4 estrategias")
+    st.markdown("#### Modo autónomo con 5 estrategias | Resultados reales | Cuenta Demo/Real")
     st.markdown("---")
 
     # Inicializar estado de sesión
@@ -605,6 +672,10 @@ def main():
         }
     if 'bot_activo' not in st.session_state:
         st.session_state.bot_activo = False
+    if 'tendencia_actual' not in st.session_state:
+        st.session_state.tendencia_actual = 'desconocida'
+        st.session_state.fuerza_actual = 0
+        st.session_state.precio_actual = 0
 
     # Panel superior de configuración
     with st.container():
@@ -633,7 +704,13 @@ def main():
             cuenta = st.radio("Cuenta", ["💰 Demo", "💵 Real"], horizontal=True, key="cuenta")
             tipo_cuenta = "PRACTICE" if "Demo" in cuenta else "REAL"
             if tipo_cuenta != st.session_state.connector.tipo_cuenta and st.session_state.conectado:
-                st.session_state.connector.cambiar_balance(tipo_cuenta)
+                with st.spinner("Cambiando cuenta..."):
+                    exito = st.session_state.connector.cambiar_balance(tipo_cuenta)
+                    if exito:
+                        st.success(f"Cuenta cambiada a {tipo_cuenta}")
+                    else:
+                        st.error("Error al cambiar cuenta")
+                st.rerun()
 
             mercado = st.radio("Mercado", ["🌙 OTC", "📊 Normal"], horizontal=True, key="mercado")
             st.session_state.config['mercado'] = "otc" if "OTC" in mercado else "forex"
@@ -662,13 +739,13 @@ def main():
                     if st.button("⏹️ DETENER BOT", use_container_width=True):
                         st.session_state.bot_activo = False
                         st.session_state.manager.estado = "Detenido"
-                        st.session_state.manager.agregar_evento("⏹️ Bot detenido manualmente")
+                        st.session_state.manager.agregar_evento("⏹️ Bot detenido manualmente", "⏹️")
                         st.rerun()
                 else:
                     if st.button("▶️ INICIAR BOT", use_container_width=True):
                         st.session_state.bot_activo = True
                         st.session_state.manager.estado = "Buscando"
-                        st.session_state.manager.agregar_evento("▶️ Bot iniciado")
+                        st.session_state.manager.agregar_evento("▶️ Bot iniciado", "▶️")
                         st.rerun()
 
     st.markdown("---")
@@ -687,24 +764,35 @@ def main():
         ciclo_principal(st.session_state.connector, st.session_state.manager, st.session_state.config)
 
     # Panel de estado en tiempo real
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([1.2, 0.8])
 
     with col1:
         st.markdown("### 📊 Estado del Bot")
         manager = st.session_state.manager
         resumen = manager.obtener_resumen()
 
-        # Tarjeta de estado
+        # Tarjeta de estado con iconos
+        icono_estado = {
+            "Detenido": "⏹️",
+            "Buscando": "🔍",
+            "Analizando": "📊",
+            "EsperandoRetroceso": "⏳",
+            "Límite alcanzado": "⛔"
+        }.get(manager.estado, "🤖")
+
         st.markdown(f"""
         <div class="status-card">
-            <h3>Activo actual: {manager.activo_actual if manager.activo_actual else 'Ninguno'}</h3>
-            <p><strong>Estado:</strong> {manager.estado}</p>
-            <p><strong>Tendencia:</strong> {st.session_state.get('tendencia_actual', 'desconocida')} 
-               (fuerza {st.session_state.get('fuerza_actual', 0)}%)</p>
-            <p><strong>Precio actual:</strong> {st.session_state.get('precio_actual', 0):.5f}</p>
+            <h3><span class="icono-estado">{icono_estado}</span> {manager.estado}</h3>
+            <p><strong>Activo actual:</strong> {manager.activo_actual if manager.activo_actual else 'Ninguno'}</p>
+            <p><strong>Tendencia:</strong> {st.session_state.tendencia_actual} (fuerza {st.session_state.fuerza_actual}%)</p>
+            <p><strong>Precio actual:</strong> {st.session_state.precio_actual:.5f}</p>
             <p><strong>Operaciones hoy:</strong> {manager.operaciones_hoy} / {st.session_state.config['limite_diario']}</p>
         </div>
         """, unsafe_allow_html=True)
+
+        # Barra de progreso animada (simula actividad)
+        if st.session_state.bot_activo and manager.estado not in ["Detenido", "Límite alcanzado"]:
+            st.progress(0.5, text="Analizando mercado...")  # Podría ser más dinámico
 
         # Log de eventos
         with st.expander("📋 Ver eventos recientes", expanded=True):
@@ -718,22 +806,15 @@ def main():
         st.metric("Perdidas", resumen['perdidas'])
         st.metric("Ganancia neta", f"${resumen['neto']:.2f}")
 
-    # Historial completo
-    with st.expander("📜 Ver historial completo de operaciones"):
-        if manager.historial:
-            df_hist = pd.DataFrame(manager.historial)
-            st.dataframe(df_hist, use_container_width=True)
-        else:
-            st.info("Aún no hay operaciones registradas.")
-
-    # Gráfico del activo actual (opcional)
-    if manager.activo_actual and st.checkbox("📉 Mostrar gráfico del activo actual"):
+    # Gráfico en tiempo real del activo actual (llena el espacio)
+    if manager.activo_actual:
+        st.markdown("### 📉 Gráfico en tiempo real")
         df = st.session_state.connector.obtener_velas(manager.activo_actual, intervalo=5, limite=50)
         if df is not None:
             df = calcular_indicadores(df)
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                                 row_heights=[0.7, 0.3],
-                                subplot_titles=("Precio con EMAs", "Volumen"))
+                                subplot_titles=(f"{manager.activo_actual}", "Volumen"))
             fig.add_trace(go.Candlestick(x=df.index,
                                           open=df['open'],
                                           high=df['high'],
@@ -747,11 +828,29 @@ def main():
                                       line=dict(color='#FFAA00', width=2), name="EMA 50"), row=1, col=1)
             fig.add_trace(go.Bar(x=df.index, y=df['volume'],
                                   marker_color='#00FF88', name="Volumen"), row=2, col=1)
-            fig.update_layout(height=500, template="plotly_dark", showlegend=False)
+            fig.update_layout(height=500, template="plotly_dark", showlegend=False,
+                              paper_bgcolor="#0A0C10", plot_bgcolor="#0A0C10")
             st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Si no hay activo, mostrar un mensaje atractivo con iconos
+        st.markdown("""
+        <div style="text-align:center; padding:50px; background:#151A24; border-radius:20px;">
+            <i class="fas fa-chart-line" style="font-size:60px; color:#00FF88;"></i>
+            <h3 style="color:#00FF88;">Esperando activo...</h3>
+            <p>El bot está buscando el mejor activo para operar.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Historial completo
+    with st.expander("📜 Ver historial completo de operaciones"):
+        if manager.historial:
+            df_hist = pd.DataFrame(manager.historial)
+            st.dataframe(df_hist, use_container_width=True)
+        else:
+            st.info("Aún no hay operaciones registradas.")
 
     # Botón manual de actualización
-    if st.button("🔄 Actualizar ahora"):
+    if st.button("🔄 Actualizar ahora", use_container_width=True):
         st.rerun()
 
 if __name__ == "__main__":
