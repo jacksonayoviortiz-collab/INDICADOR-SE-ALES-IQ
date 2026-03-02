@@ -1,10 +1,8 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN CON VENCIMIENTO VARIABLE
-- Prioriza activos por fuerza de tendencia
-- Vencimiento 1 min (fuerza ≥70%, volumen alto, sin retroceso)
-- Vencimiento 5 min (retroceso en tendencia fuerte)
-- 5 estrategias independientes que votan
-- Cambio automático de activo cada 5 min si no hay señal
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN MEJORADA
+- Corregido error de inicialización de sesión
+- Operaciones de 1 minuto con umbrales adaptativos según fuerza y volumen
+- Filtro de consistencia de tendencia (datos del día)
 """
 
 import streamlit as st
@@ -381,9 +379,9 @@ def detectar_tendencia(df):
 
     if direccion == 'lateral':
         return 'lateral', 0, 'lateral'
-    elif fuerza >= 70:
+    elif fuerza >= 75:
         return direccion, min(100, fuerza), 'muy fuerte'
-    elif fuerza >= 50:
+    elif fuerza >= 55:
         return direccion, min(100, fuerza), 'fuerte'
     elif fuerza >= 35:
         return direccion, min(100, fuerza), 'débil'
@@ -487,30 +485,50 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
         return 0, 0
 
 # ============================================
-# DETECCIÓN DE RETROCESO Y DECISIÓN DE VENCIMIENTO
+# DETECCIÓN DE RETROCESO Y DECISIÓN DE VENCIMIENTO (MEJORADA)
 # ============================================
 def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
     """
     Retorna (hay_retroceso, vencimiento_recomendado)
     vencimiento: 1 o 5 minutos
+    Incorpora filtros de volumen y consistencia de tendencia.
     """
     if df is None or len(df) < 20:
         return False, 5
     ult = df.iloc[-1]
     soportes, resistencias = detectar_soportes_resistencias(df)
 
-    # Caso 1: Tendencia muy fuerte (≥70%) y volumen alto y sin retroceso -> 1 minuto
-    if fuerza >= 70 and ult['volume_ratio'] > 1.5:
-        # Verificar si está cerca de un extremo (posible retroceso inminente)
-        cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
-        cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
-        if not cerca_soporte and not cerca_resistencia:
-            # No hay señal de retroceso cercano -> operación rápida de 1 min
-            return False, 1
+    # --- Filtro de consistencia de tendencia (datos del día) ---
+    # Verificar que la tendencia se mantiene en las últimas 10 velas
+    pendiente_larga = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-10]) / 10
+    if tendencia == 'alcista' and pendiente_larga <= 0:
+        return False, 5  # La tendencia no es consistente
+    if tendencia == 'bajista' and pendiente_larga >= 0:
+        return False, 5
 
-    # Caso 2: Buscar retroceso para operar a 5 minutos
+    # Evitar zonas de sobrecompra/venta extremas
+    if ult['rsi'] > 75 or ult['rsi'] < 25:
+        return False, 5
+
+    # --- Decisión de vencimiento basada en fuerza y volumen ---
+    if fuerza >= 75:
+        # Muy fuerte: cualquier volumen es aceptable
+        if ult['volume_ratio'] >= 1.0:
+            # Verificar que no haya señal de retroceso inminente
+            cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
+            cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
+            if not cerca_soporte and not cerca_resistencia:
+                return False, 1  # Operación rápida
+    elif 55 <= fuerza < 75:
+        # Fuerte: requiere volumen significativo
+        if ult['volume_ratio'] >= 1.5:
+            cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
+            cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
+            if not cerca_soporte and not cerca_resistencia:
+                return False, 1
+
+    # --- Lógica de retroceso para operaciones de 5 minutos ---
     if tendencia == 'alcista':
-        # Soporte cercano o EMA20 por debajo
         soporte_cercano = min([s for s in soportes if s < ult['close']], default=None)
         if soporte_cercano and (ult['close'] - soporte_cercano) < 0.002 * ult['close']:
             return True, 5
@@ -593,6 +611,10 @@ class TradingManager:
 def ciclo_principal(connector, manager, config):
     tiempo_actual = time.time()
 
+    # Verificar que el manager esté correctamente inicializado
+    if not hasattr(manager, 'ultimo_cambio_activo'):
+        manager.ultimo_cambio_activo = tiempo_actual
+
     if manager.operaciones_hoy >= config['limite_diario']:
         if manager.estado != "Límite alcanzado":
             manager.estado = "Límite alcanzado"
@@ -674,12 +696,12 @@ def ciclo_principal(connector, manager, config):
     if manager.estado == "Analizando":
         decision, confianza = confirmar_operacion(df, tendencia, fuerza)
         if decision != 0:
-            # Evaluar si hay retroceso y decidir vencimiento
+            # Evaluar retroceso y vencimiento con la nueva lógica
             hay_retroceso, vencimiento = evaluar_retroceso_y_vencimiento(df, tendencia, fuerza)
             direccion = "COMPRA" if decision == 1 else "VENTA"
 
             if vencimiento == 1:
-                # Operación rápida: sin esperar retroceso
+                # Operación rápida de 1 minuto
                 id_orden, msg = connector.colocar_orden(
                     manager.activo_actual,
                     direccion,
@@ -687,7 +709,7 @@ def ciclo_principal(connector, manager, config):
                     expiracion=1
                 )
                 if id_orden:
-                    manager.agregar_evento(f"✅ OPERACIÓN EJECUTADA: {direccion} en {manager.activo_actual} - Vencimiento 1 minuto (ID: {id_orden})", "✅")
+                    manager.agregar_evento(f"✅ OPERACIÓN EJECUTADA (1m): {direccion} en {manager.activo_actual} - ID: {id_orden}", "✅")
                     manager.ordenes_pendientes[id_orden] = {
                         'activo': manager.activo_actual,
                         'direccion': direccion,
@@ -703,7 +725,6 @@ def ciclo_principal(connector, manager, config):
                 # Operación a 5 minutos: esperar retroceso
                 precio_entrada = None
                 if hay_retroceso:
-                    # Calcular punto de retroceso
                     if tendencia == 'alcista':
                         soportes, _ = detectar_soportes_resistencias(df)
                         soporte_cercano = min([s for s in soportes if s < ult['close']], default=ult['ema_20'])
@@ -713,7 +734,6 @@ def ciclo_principal(connector, manager, config):
                         resistencia_cercana = max([r for r in resistencias if r > ult['close']], default=ult['ema_20'])
                         precio_entrada = min(resistencia_cercana, ult['ema_20'])
                 else:
-                    # Si no hay retroceso claro, usar EMA20
                     precio_entrada = ult['ema_20']
 
                 manager.agregar_evento(f"🎯 Oportunidad a 5 min en {manager.activo_actual} - {direccion} (confianza {confianza}%)", "🎯")
@@ -737,7 +757,7 @@ def ciclo_principal(connector, manager, config):
                 expiracion=5
             )
             if id_orden:
-                manager.agregar_evento(f"✅ OPERACIÓN EJECUTADA: {manager.direccion} en {manager.activo_actual} - Vencimiento 5 minutos (ID: {id_orden})", "✅")
+                manager.agregar_evento(f"✅ OPERACIÓN EJECUTADA (5m): {manager.direccion} en {manager.activo_actual} - ID: {id_orden}", "✅")
                 manager.ordenes_pendientes[id_orden] = {
                     'activo': manager.activo_actual,
                     'direccion': manager.direccion,
@@ -764,7 +784,7 @@ def ciclo_principal(connector, manager, config):
 # ============================================
 def main():
     st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### Modo autónomo con vencimiento variable (1/5 min) | Prioriza tendencias fuertes")
+    st.markdown("#### Modo autónomo con vencimiento variable (1/5 min) | Filtros de volumen y consistencia")
     st.markdown("---")
 
     # Inicializar estado de sesión
