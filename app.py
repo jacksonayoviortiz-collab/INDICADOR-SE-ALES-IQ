@@ -1,10 +1,10 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN MEJORADA
-- Ajustes de umbrales para mayor operatividad
-- Muestra volumen de compra/venta
-- Muestra señal actual
-- Ciclo de múltiples activos
-- Análisis de soportes/resistencias
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN FINAL
+- 5 estrategias con umbrales reducidos
+- Confirmación por mayoría simple
+- Ciclo de múltiples activos (cada 5 min sin señal cambia)
+- Interfaz con señal y volumen de compra/venta
+- Soportes y resistencias en gráfico
 """
 
 import streamlit as st
@@ -308,10 +308,9 @@ def calcular_indicadores(df):
     return df
 
 # ============================================
-# DETECCIÓN DE TENDENCIA Y FUERZA
+# DETECCIÓN DE SOPORTES Y RESISTENCIAS
 # ============================================
 def detectar_soportes_resistencias(df, ventana=20):
-    """Detecta niveles de soporte y resistencia basados en máximos y mínimos locales."""
     if df is None or len(df) < ventana:
         return [], []
     highs = df['high'].values
@@ -329,8 +328,10 @@ def detectar_soportes_resistencias(df, ventana=20):
         soportes = [df['low'].min()]
     return soportes[-3:], resistencias[-3:]
 
+# ============================================
+# DETECCIÓN DE TENDENCIA Y FUERZA
+# ============================================
 def detectar_tendencia(df):
-    """Retorna: (direccion, fuerza, tipo)"""
     if df is None or len(df) < 50:
         return 'lateral', 0, 'lateral'
     ult = df.iloc[-1]
@@ -384,9 +385,9 @@ def estrategia_1_ruptura_con_volumen(df):
     ult = df.iloc[-1]
     max_10 = df['high'].iloc[-10:-1].max()
     min_10 = df['low'].iloc[-10:-1].min()
-    if ult['close'] > max_10 and ult['volume_ratio'] > 1.2:
+    if ult['close'] > max_10 and ult['volume_ratio'] > 1.1:
         return 1, 75
-    elif ult['close'] < min_10 and ult['volume_ratio'] > 1.2:
+    elif ult['close'] < min_10 and ult['volume_ratio'] > 1.1:
         return -1, 75
     return 0, 0
 
@@ -395,9 +396,9 @@ def estrategia_2_pendiente_ema_adx(df):
         return 0, 0
     ult = df.iloc[-1]
     pendiente = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
-    if pendiente > 0.002 * ult['close'] and ult['adx'] > 22 and ult['adx_pos'] > ult['adx_neg']:
+    if pendiente > 0.0015 * ult['close'] and ult['adx'] > 20 and ult['adx_pos'] > ult['adx_neg']:
         return 1, 70
-    elif pendiente < -0.002 * ult['close'] and ult['adx'] > 22 and ult['adx_neg'] > ult['adx_pos']:
+    elif pendiente < -0.0015 * ult['close'] and ult['adx'] > 20 and ult['adx_neg'] > ult['adx_pos']:
         return -1, 70
     return 0, 0
 
@@ -405,9 +406,9 @@ def estrategia_3_bandas_bollinger_rsi(df):
     if df is None or len(df) < 20:
         return 0, 0
     ult = df.iloc[-1]
-    if ult['close'] <= ult['bb_lower'] and ult['rsi'] < 40 and ult['volume_ratio'] > 1.1:
+    if ult['close'] <= ult['bb_lower'] and ult['rsi'] < 45 and ult['volume_ratio'] > 1.0:
         return 1, 65
-    elif ult['close'] >= ult['bb_upper'] and ult['rsi'] > 60 and ult['volume_ratio'] > 1.1:
+    elif ult['close'] >= ult['bb_upper'] and ult['rsi'] > 55 and ult['volume_ratio'] > 1.0:
         return -1, 65
     return 0, 0
 
@@ -417,9 +418,9 @@ def estrategia_4_macd_histograma(df):
     macd = ta.trend.MACD(df['close'])
     df['macd'] = macd.macd()
     df['macd_signal'] = macd.macd_signal()
-    if df['macd'].iloc[-1] > df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] <= df['macd_signal'].iloc[-2] and df['volume_ratio'].iloc[-1] > 1.1:
+    if df['macd'].iloc[-1] > df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] <= df['macd_signal'].iloc[-2] and df['volume_ratio'].iloc[-1] > 1.0:
         return 1, 68
-    elif df['macd'].iloc[-1] < df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] >= df['macd_signal'].iloc[-2] and df['volume_ratio'].iloc[-1] > 1.1:
+    elif df['macd'].iloc[-1] < df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] >= df['macd_signal'].iloc[-2] and df['volume_ratio'].iloc[-1] > 1.0:
         return -1, 68
     return 0, 0
 
@@ -428,9 +429,9 @@ def estrategia_5_parabolic_sar_volumen(df):
         return 0, 0
     ult = df.iloc[-1]
     prev = df.iloc[-2]
-    if prev['psar'] > prev['close'] and ult['psar'] < ult['close'] and ult['volume_ratio'] > 1.2:
+    if prev['psar'] > prev['close'] and ult['psar'] < ult['close'] and ult['volume_ratio'] > 1.1:
         return 1, 72
-    elif prev['psar'] < prev['close'] and ult['psar'] > ult['close'] and ult['volume_ratio'] > 1.2:
+    elif prev['psar'] < prev['close'] and ult['psar'] > ult['close'] and ult['volume_ratio'] > 1.1:
         return -1, 72
     return 0, 0
 
@@ -454,11 +455,17 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
         elif dir_ == -1:
             venta_count += 1
 
-    if compra_count >= 3 and tendencia == 'alcista':
-        conf_promedio = sum(conf for dir_, conf in resultados if dir_ == 1) // compra_count
+    # Dar un poco más de peso a la tendencia
+    if tendencia == 'alcista':
+        compra_count += 1
+    elif tendencia == 'bajista':
+        venta_count += 1
+
+    if compra_count >= 3:
+        conf_promedio = sum(conf for dir_, conf in resultados if dir_ == 1) // max(1, compra_count)
         return 1, conf_promedio
-    elif venta_count >= 3 and tendencia == 'bajista':
-        conf_promedio = sum(conf for dir_, conf in resultados if dir_ == -1) // venta_count
+    elif venta_count >= 3:
+        conf_promedio = sum(conf for dir_, conf in resultados if dir_ == -1) // max(1, venta_count)
         return -1, conf_promedio
     else:
         return 0, 0
@@ -473,18 +480,18 @@ def calcular_retroceso(df, tendencia):
     soportes, resistencias = detectar_soportes_resistencias(df)
     if tendencia == 'alcista':
         soporte_cercano = min([s for s in soportes if s < ult['close']], default=None)
-        if soporte_cercano and (ult['close'] - soporte_cercano) < 0.002 * ult['close']:
+        if soporte_cercano and (ult['close'] - soporte_cercano) < 0.003 * ult['close']:
             return soporte_cercano
         else:
             min_reciente = df['low'].iloc[-10:].min()
-            return max(ult['ema_20'], min_reciente * 1.003)
+            return max(ult['ema_20'], min_reciente * 1.002)
     elif tendencia == 'bajista':
         resistencia_cercana = max([r for r in resistencias if r > ult['close']], default=None)
-        if resistencia_cercana and (resistencia_cercana - ult['close']) < 0.002 * ult['close']:
+        if resistencia_cercana and (resistencia_cercana - ult['close']) < 0.003 * ult['close']:
             return resistencia_cercana
         else:
             max_reciente = df['high'].iloc[-10:].max()
-            return min(ult['ema_20'], max_reciente * 0.997)
+            return min(ult['ema_20'], max_reciente * 0.998)
     return None
 
 # ============================================
@@ -568,7 +575,7 @@ def ciclo_principal(connector, manager, config):
     if manager.activo_actual is None:
         buscar_nuevo = True
     else:
-        if manager.estado == "Analizando" and tiempo_actual - manager.ultimo_cambio_activo > 600:
+        if manager.estado == "Analizando" and tiempo_actual - manager.ultimo_cambio_activo > 300:
             manager.agregar_evento(f"⏱️ Tiempo sin señal en {manager.activo_actual}. Buscando otro...", "⏱️")
             buscar_nuevo = True
         else:
@@ -578,7 +585,7 @@ def ciclo_principal(connector, manager, config):
         manager.estado = "🔍 Buscando activos..."
         manager.agregar_evento("Buscando activos con tendencias...", "🔍")
         activos = connector.obtener_activos_disponibles(config['mercado'], max_activos=100)
-        for act in activos[:30]:
+        for act in activos[:50]:  # Analizar hasta 50
             df = connector.obtener_velas(act, intervalo=5, limite=100)
             if df is None:
                 continue
@@ -669,10 +676,10 @@ def ciclo_principal(connector, manager, config):
                 manager.agregar_evento(f"❌ Error al ejecutar orden: {msg}", "❌")
                 manager.estado = "Analizando"
         else:
-            if manager.direccion == "COMPRA" and ult['close'] > manager.precio_objetivo * 1.015:
+            if manager.direccion == "COMPRA" and ult['close'] > manager.precio_objetivo * 1.01:
                 manager.agregar_evento("⏹️ Retroceso cancelado - precio se alejó", "⏹️")
                 manager.estado = "Analizando"
-            elif manager.direccion == "VENTA" and ult['close'] < manager.precio_objetivo * 0.985:
+            elif manager.direccion == "VENTA" and ult['close'] < manager.precio_objetivo * 0.99:
                 manager.agregar_evento("⏹️ Retroceso cancelado - precio se alejó", "⏹️")
                 manager.estado = "Analizando"
 
@@ -681,7 +688,7 @@ def ciclo_principal(connector, manager, config):
 # ============================================
 def main():
     st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### Modo autónomo con 5 estrategias | Umbrales ajustados | Múltiples activos")
+    st.markdown("#### Modo autónomo con 5 estrategias | Umbrales flexibles | Múltiples activos")
     st.markdown("---")
 
     # Inicializar estado de sesión
