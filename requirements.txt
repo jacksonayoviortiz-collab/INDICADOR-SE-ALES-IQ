@@ -9,4 +9,4 @@ scikit-learn==1.5.2
 joblib==1.4.2
 xgboost==2.1.3
 python-dotenv==1.0.1
-git+https://github.com/williansandi/iqoptionapi-2025-Atualizada-.git
+-e git+https://github.com/williansandi/iqoptionapi-2025-Atualizada-.git#egg=iqoptionapi
