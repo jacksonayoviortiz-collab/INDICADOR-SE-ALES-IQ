@@ -1,12 +1,11 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN TENDENCIAS
-Características:
-- 3 estrategias de tendencia independientes (basadas en ruptura, pendiente de EMA y ADX)
-- Confirmación con volumen real y fuerza del mercado
-- Selección automática de los 2 activos más confiables
-- Indicación de hora exacta de operación (alerta 1 min antes)
-- Cálculo y visualización de precisión por estrategia y global
-- Interfaz moderna en verde/negro
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN MEJORADA
+Características nuevas:
+- Escaneo completo de activos en cada actualización
+- Notificaciones toast 1 minuto antes de operar
+- Interfaz rediseñada con glassmorphism y tema verde/negro
+- Estrategias más precisas y sensibles al volumen
+- Indicador visual de fuerza de tendencia
 """
 
 import streamlit as st
@@ -44,73 +43,157 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS personalizado - Tema verde/negro profesional
+# CSS personalizado - Tema verde/negro con glassmorphism y patrón de fondo
 st.markdown("""
 <style>
-    /* Fondo general */
-    .stApp { background-color: #0A0C10; color: #E0E0E0; font-family: 'Inter', sans-serif; }
+    /* Fondo con patrón sutil */
+    .stApp {
+        background-color: #0A0C10;
+        background-image: 
+            linear-gradient(rgba(0, 255, 136, 0.02) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0, 255, 136, 0.02) 1px, transparent 1px);
+        background-size: 50px 50px;
+        color: #E0E0E0;
+        font-family: 'Inter', 'Poppins', sans-serif;
+    }
     /* Títulos en verde neón */
-    h1, h2, h3 { color: #00FF88 !important; font-weight: 700 !important; }
+    h1, h2, h3 {
+        color: #00FF88 !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.5px;
+        text-shadow: 0 0 10px rgba(0,255,136,0.3);
+    }
     h1 { border-bottom: 2px solid #00FF88; padding-bottom: 10px; }
-    /* Tarjetas de activos */
+    /* Tarjetas de activos con glassmorphism mejorado */
     .asset-card {
-        background: rgba(20, 25, 35, 0.9);
-        backdrop-filter: blur(5px);
-        border-radius: 24px;
-        padding: 22px 18px;
-        box-shadow: 0 15px 35px -10px rgba(0, 255, 136, 0.3);
-        border: 1px solid rgba(0, 255, 136, 0.3);
-        transition: transform 0.25s ease;
+        background: rgba(20, 25, 35, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-radius: 28px;
+        padding: 24px 20px;
+        box-shadow: 0 20px 40px -12px rgba(0, 255, 136, 0.3);
+        border: 1px solid rgba(0, 255, 136, 0.25);
+        transition: transform 0.3s cubic-bezier(0.2,0.9,0.3,1), box-shadow 0.3s;
         height: 100%;
         display: flex;
         flex-direction: column;
-        border-left: 4px solid #00FF88;
+        position: relative;
+        overflow: hidden;
     }
-    .asset-card:hover { transform: translateY(-6px); box-shadow: 0 25px 45px -10px #00FF88; }
-    .asset-name { font-size: 20px; font-weight: 700; color: #FFFFFF; margin-bottom: 8px; }
-    .asset-price { font-size: 14px; color: #AAAAAA; margin-bottom: 15px; }
+    .asset-card::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(circle, rgba(0,255,136,0.1) 0%, transparent 70%);
+        opacity: 0;
+        transition: opacity 0.5s;
+        pointer-events: none;
+    }
+    .asset-card:hover::before { opacity: 1; }
+    .asset-card:hover {
+        transform: translateY(-8px) scale(1.02);
+        box-shadow: 0 30px 50px -15px #00FF88;
+        border-color: #00FF88;
+    }
+    .asset-name {
+        font-size: 22px;
+        font-weight: 700;
+        color: #FFFFFF;
+        margin-bottom: 8px;
+        letter-spacing: -0.3px;
+    }
+    .asset-price {
+        font-size: 14px;
+        color: #AAAAAA;
+        margin-bottom: 18px;
+        display: flex;
+        justify-content: space-between;
+    }
     .asset-signal {
-        font-size: 16px; font-weight: 700; padding: 10px 14px; border-radius: 30px;
-        text-align: center; margin-bottom: 12px; text-transform: uppercase;
+        font-size: 16px;
+        font-weight: 700;
+        padding: 12px 16px;
+        border-radius: 40px;
+        text-align: center;
+        margin-bottom: 15px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        backdrop-filter: blur(4px);
     }
-    .signal-compra { background-color: rgba(0, 255, 136, 0.15); color: #00FF88; border: 1px solid #00FF88; }
-    .signal-venta { background-color: rgba(255, 70, 70, 0.15); color: #FF4646; border: 1px solid #FF4646; }
+    .signal-compra {
+        background: rgba(0, 255, 136, 0.2);
+        color: #00FF88;
+        border: 1px solid #00FF88;
+        box-shadow: 0 0 15px rgba(0,255,136,0.3);
+    }
+    .signal-venta {
+        background: rgba(255, 70, 70, 0.2);
+        color: #FF4646;
+        border: 1px solid #FF4646;
+        box-shadow: 0 0 15px rgba(255,70,70,0.3);
+    }
     .asset-footer {
-        font-size: 13px; color: #888; margin-top: auto; padding-top: 15px;
-        border-top: 1px solid #222; display: flex; justify-content: space-between;
+        font-size: 13px;
+        color: #888;
+        margin-top: auto;
+        padding-top: 15px;
+        border-top: 1px solid rgba(255,255,255,0.1);
+        display: flex;
+        justify-content: space-between;
     }
-    .asset-prob { font-size: 24px; font-weight: 800; margin: 8px 0; }
-    /* Botones */
+    .asset-prob {
+        font-size: 28px;
+        font-weight: 800;
+        margin: 10px 0;
+        text-shadow: 0 0 15px currentColor;
+    }
+    /* Botones con gradiente y animación */
     .stButton button {
         background: linear-gradient(135deg, #00FF88, #00CC66);
         color: #0A0C10;
         font-weight: 700;
         border-radius: 40px;
         border: none;
-        padding: 12px 28px;
-        transition: all 0.2s;
-        box-shadow: 0 8px 20px -5px #00FF88;
+        padding: 14px 32px;
+        transition: all 0.3s;
+        box-shadow: 0 10px 25px -8px #00FF88;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        font-size: 14px;
     }
     .stButton button:hover {
         background: linear-gradient(135deg, #00CC66, #00FF88);
-        box-shadow: 0 12px 28px -5px #00FF88;
+        box-shadow: 0 15px 35px -5px #00FF88;
+        transform: scale(1.03);
     }
-    /* Alertas */
-    .alert-box {
-        background: linear-gradient(90deg, #1A2A1A, #0A0C10);
-        border-left: 6px solid #FFAA00;
-        border-radius: 20px;
-        padding: 20px 25px;
-        margin: 20px 0;
-        box-shadow: 0 15px 30px -10px #FFAA0044;
+    /* Alertas toast personalizadas (las de Streamlit ya son bonitas) */
+    div[data-testid="stToast"] {
+        background: #1A2A1A !important;
+        border-left: 6px solid #FFAA00 !important;
+        border-radius: 16px !important;
+        color: white !important;
+        font-weight: 600 !important;
+        box-shadow: 0 20px 40px -10px #FFAA00 !important;
     }
     /* Panel de precisión */
     .accuracy-panel {
-        background: #151A24;
-        border-radius: 20px;
-        padding: 20px;
+        background: rgba(20, 25, 35, 0.6);
+        backdrop-filter: blur(8px);
+        border-radius: 24px;
+        padding: 22px;
         border: 1px solid #00FF8822;
-        margin-top: 20px;
+        margin-top: 25px;
+        box-shadow: 0 15px 30px -12px rgba(0,255,136,0.2);
+    }
+    /* Estrellas de fuerza */
+    .strength-star {
+        color: #FFD700;
+        font-size: 18px;
+        margin-left: 4px;
+        text-shadow: 0 0 8px #FFD700;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -118,7 +201,7 @@ st.markdown("""
 # Zona horaria Ecuador
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
-# === CLASE DE CONEXIÓN (sin cambios, igual que antes) ===
+# === CLASE DE CONEXIÓN (con caché mejorada) ===
 class IQOptionConnector:
     def __init__(self):
         self.api = None
@@ -150,14 +233,15 @@ class IQOptionConnector:
             return self.api.get_balance()
         return 0
 
-    def obtener_activos_disponibles(self, mercado="otc", max_activos=50):
+    def obtener_activos_disponibles(self, mercado="otc", max_activos=50, force_refresh=False):
+        """Obtiene activos, con opción de forzar actualización (ignorar caché)."""
         if not self.conectado:
             return []
         ahora = time.time()
         cache_key = f"{mercado}_{max_activos}"
-        if (self.ultima_actualizacion_activos and
-            ahora - self.ultima_actualizacion_activos < 300 and
-            cache_key in self.activos_cache):
+
+        # Si force_refresh es True, ignoramos la caché
+        if not force_refresh and self.ultima_actualizacion_activos and ahora - self.ultima_actualizacion_activos < 120 and cache_key in self.activos_cache:
             return self.activos_cache[cache_key]
 
         try:
@@ -214,104 +298,88 @@ class IQOptionConnector:
 
 # === INDICADORES COMUNES ===
 def calcular_indicadores_base(df):
-    """Calcula indicadores necesarios para todas las estrategias."""
     if df is None or len(df) < 30:
         return None
-    # RSI
     df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-    # EMAs
     df['ema_20'] = ta.trend.EMAIndicator(df['close'], window=20).ema_indicator()
     df['ema_50'] = ta.trend.EMAIndicator(df['close'], window=50).ema_indicator()
-    # ATR (para fuerza)
     df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=14).average_true_range()
-    # Volumen
     df['volume_ma'] = df['volume'].rolling(20).mean()
     df['volume_ratio'] = df['volume'] / df['volume_ma'].clip(lower=1)
-    # ADX (para medir fuerza de tendencia)
     adx = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=14)
     df['adx'] = adx.adx()
     df['adx_pos'] = adx.adx_pos()
     df['adx_neg'] = adx.adx_neg()
+    # Bandas de Bollinger
+    bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
+    df['bb_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / df['close'] * 100
     return df
 
-# === ESTRATEGIA 1: Ruptura de máximos/mínimos con volumen ===
+# === ESTRATEGIA 1: Ruptura de máximo/mínimo con volumen fuerte ===
 def estrategia_ruptura_con_volumen(df, ventana=10):
-    """
-    Detecta ruptura de máximo reciente (o mínimo) con volumen creciente.
-    """
     if df is None or len(df) < ventana+5:
         return None, 0
     ult = df.iloc[-1]
-    prev = df.iloc[-2]
-    max_reciente = df['high'].iloc[-ventana:-1].max()
-    min_reciente = df['low'].iloc[-ventana:-1].min()
-
-    # Ruptura alcista
-    if ult['close'] > max_reciente and ult['volume_ratio'] > 1.5:
-        # Confirmar fuerza con ATR y ADX
+    # Máximo/mínimo de las últimas 'ventana' velas (excluyendo la actual)
+    max_reciente = df['high'].iloc[-ventana-1:-1].max()
+    min_reciente = df['low'].iloc[-ventana-1:-1].min()
+    # Ruptura alcista con volumen 2x la media
+    if ult['close'] > max_reciente and ult['volume_ratio'] > 2.0:
         if ult['adx'] > 25 and ult['adx_pos'] > ult['adx_neg']:
-            return 'COMPRA', 85
+            return 'COMPRA', 90
         else:
-            return 'COMPRA', 70
+            return 'COMPRA', 75
     # Ruptura bajista
-    elif ult['close'] < min_reciente and ult['volume_ratio'] > 1.5:
+    elif ult['close'] < min_reciente and ult['volume_ratio'] > 2.0:
         if ult['adx'] > 25 and ult['adx_neg'] > ult['adx_pos']:
-            return 'VENTA', 85
+            return 'VENTA', 90
         else:
-            return 'VENTA', 70
+            return 'VENTA', 75
     return None, 0
 
-# === ESTRATEGIA 2: Pendiente de EMA + Volumen + Fuerza ===
+# === ESTRATEGIA 2: Pendiente de EMA + volumen + anchura de BB ===
 def estrategia_pendiente_ema(df, periodo=5):
-    """
-    Detecta tendencia basada en la pendiente de la EMA 20 y la confirma con volumen y ADX.
-    """
     if df is None or len(df) < 20:
         return None, 0
     ult = df.iloc[-1]
     pendiente = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-periodo]) / periodo
-
-    # Tendencia alcista si pendiente positiva, volumen alto y ADX fuerte
-    if pendiente > 0.01 * ult['close']:  # Umbral dinámico
-        if ult['volume_ratio'] > 1.3 and ult['adx'] > 25 and ult['adx_pos'] > ult['adx_neg']:
-            return 'COMPRA', 80
+    # Evitar mercados laterales (BB estrechas)
+    if ult['bb_width'] < 1.5:
+        return None, 0
+    if pendiente > 0.015 * ult['close']:
+        if ult['volume_ratio'] > 1.5 and ult['adx'] > 25 and ult['adx_pos'] > ult['adx_neg']:
+            return 'COMPRA', 85
         elif ult['volume_ratio'] > 1.2:
-            return 'COMPRA', 65
-    # Tendencia bajista
-    elif pendiente < -0.01 * ult['close']:
-        if ult['volume_ratio'] > 1.3 and ult['adx'] > 25 and ult['adx_neg'] > ult['adx_pos']:
-            return 'VENTA', 80
+            return 'COMPRA', 70
+    elif pendiente < -0.015 * ult['close']:
+        if ult['volume_ratio'] > 1.5 and ult['adx'] > 25 and ult['adx_neg'] > ult['adx_pos']:
+            return 'VENTA', 85
         elif ult['volume_ratio'] > 1.2:
-            return 'VENTA', 65
+            return 'VENTA', 70
     return None, 0
 
-# === ESTRATEGIA 3: ADX + Volumen para continuación de tendencia ===
+# === ESTRATEGIA 3: ADX alto sostenido + volumen ===
 def estrategia_adx_continuacion(df, umbral_adx=25):
-    """
-    Cuando el ADX es alto (>25) y el volumen acompaña, la tendencia actual es fuerte y probable que continúe.
-    """
     if df is None or len(df) < 30:
         return None, 0
     ult = df.iloc[-1]
-    if ult['adx'] > umbral_adx:
-        # Determinar dirección por la pendiente de la EMA
+    # Verificar que el ADX ha estado alto durante al menos 3 velas
+    adx_alto = all(df['adx'].iloc[-i] > umbral_adx for i in range(1,4) if len(df) >= i)
+    if adx_alto and ult['volume_ratio'] > 1.3:
         pendiente = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-3]) / 3
-        if pendiente > 0 and ult['volume_ratio'] > 1.2:
-            return 'COMPRA', 75
-        elif pendiente < 0 and ult['volume_ratio'] > 1.2:
-            return 'VENTA', 75
+        if pendiente > 0:
+            return 'COMPRA', 80
+        elif pendiente < 0:
+            return 'VENTA', 80
     return None, 0
 
-# === REGISTRO DE PRECISIÓN (simulado, se puede mejorar con datos reales) ===
+# === REGISTRO DE PRECISIÓN ===
 class AccuracyTracker:
     def __init__(self):
-        self.historial = []  # lista de dicts: {'estrategia': nombre, 'acierto': bool, 'senal': str}
+        self.historial = []
         self.estrategias = ['Ruptura', 'Pendiente EMA', 'ADX Continuación']
 
     def registrar(self, nombre_estrategia, senal, resultado_real):
-        """
-        resultado_real: True si la operación fue exitosa, False si no.
-        """
         self.historial.append({
             'estrategia': nombre_estrategia,
             'senal': senal,
@@ -330,7 +398,23 @@ class AccuracyTracker:
             return 0.0
         return np.mean([r['acierto'] for r in self.historial]) * 100
 
-# === ANÁLISIS DE UN ACTIVO CON LAS 3 ESTRATEGIAS ===
+# === FUNCIÓN PARA CALCULAR FUERZA (estrellas) ===
+def calcular_fuerza(prob, volumen_ratio, adx):
+    """Devuelve número de estrellas (1-5) según la fuerza de la señal."""
+    fuerza = 0
+    if prob > 80:
+        fuerza += 2
+    elif prob > 65:
+        fuerza += 1
+    if volumen_ratio > 2.0:
+        fuerza += 2
+    elif volumen_ratio > 1.5:
+        fuerza += 1
+    if adx > 30:
+        fuerza += 1
+    return min(5, fuerza)
+
+# === ANÁLISIS DE UN ACTIVO ===
 def analizar_activo(activo, connector, tracker):
     df = connector.obtener_velas(activo, intervalo=5, limite=100)
     if df is None:
@@ -339,7 +423,6 @@ def analizar_activo(activo, connector, tracker):
     if df is None:
         return None
 
-    # Evaluar cada estrategia
     estrategias = [
         ('Ruptura', estrategia_ruptura_con_volumen),
         ('Pendiente EMA', estrategia_pendiente_ema),
@@ -365,7 +448,6 @@ def analizar_activo(activo, connector, tracker):
             votos_venta += confianza
             peso_total += confianza
 
-    # Decidir señal final
     if peso_total == 0:
         senal_final = None
         probabilidad = 0
@@ -380,10 +462,10 @@ def analizar_activo(activo, connector, tracker):
             senal_final = None
             probabilidad = 0
 
-    # Score para ranking (basado en probabilidad y confianza)
-    score = probabilidad * 2 if senal_final else 30
-
+    # Score para ranking (probabilidad * peso de volumen)
     ult = df.iloc[-1]
+    score = probabilidad * (1 + 0.5 * (ult['volume_ratio'] - 1)) if senal_final else 20
+
     return {
         'activo': activo,
         'score': score,
@@ -393,13 +475,15 @@ def analizar_activo(activo, connector, tracker):
         'rsi': ult['rsi'],
         'volume_ratio': ult['volume_ratio'],
         'adx': ult['adx'],
+        'fuerza': calcular_fuerza(probabilidad, ult['volume_ratio'], ult['adx']),
         'df': df,
         'detalles_estrategias': detalles_estrategias
     }
 
-# === ACTUALIZAR TOP 2 ACTIVOS ===
+# === ACTUALIZAR TOP 2 ACTIVOS (siempre forzando recarga) ===
 def actualizar_top_activos(connector, mercado, tracker, max_activos=50):
-    activos_lista = connector.obtener_activos_disponibles(mercado, max_activos)
+    # Forzamos la recarga de activos desde la API
+    activos_lista = connector.obtener_activos_disponibles(mercado, max_activos, force_refresh=True)
     if not activos_lista:
         return []
     resultados = []
@@ -422,12 +506,12 @@ def actualizar_top_activos(connector, mercado, tracker, max_activos=50):
             resultados_unicos.append(r)
 
     resultados_unicos.sort(key=lambda x: x['score'], reverse=True)
-    return resultados_unicos[:2]  # Solo los 2 mejores
+    return resultados_unicos[:2]
 
 # === INTERFAZ PRINCIPAL ===
 def main():
     st.title("📈 IQ OPTION TREND SCANNER")
-    st.markdown("#### Sistema de 3 Estrategias de Tendencia + Volumen | Top 2 Activos")
+    st.markdown("#### Sistema de 3 Estrategias de Tendencia | Top 2 Activos en Tiempo Real")
     st.markdown("---")
 
     # Inicializar estado
@@ -443,6 +527,8 @@ def main():
         st.session_state.mercado_actual = "otc"
     if 'tracker' not in st.session_state:
         st.session_state.tracker = AccuracyTracker()
+    if 'notificaciones_activas' not in st.session_state:
+        st.session_state.notificaciones_activas = set()
 
     # Barra lateral
     with st.sidebar:
@@ -490,8 +576,8 @@ def main():
             mercado_key = "otc" if "OTC" in mercado else "forex"
             st.session_state.mercado_actual = mercado_key
 
-            if st.button("🔍 ANALIZAR TOP 2", use_container_width=True):
-                with st.spinner("Analizando activos..."):
+            if st.button("🔍 ANALIZAR TOP 2 (NUEVO ESCANEO)", use_container_width=True):
+                with st.spinner("Escaneando TODOS los activos disponibles..."):
                     top = actualizar_top_activos(
                         st.session_state.connector,
                         mercado_key,
@@ -500,8 +586,9 @@ def main():
                     )
                     st.session_state.top_activos = top
                     st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
+                    st.session_state.notificaciones_activas = set()  # Reiniciar notificaciones
                     if top:
-                        st.success(f"✅ Análisis completado. {len(top)} activos encontrados.")
+                        st.success(f"✅ Nuevo análisis completado. {len(top)} activos encontrados.")
                     else:
                         st.warning("No se encontraron activos con datos suficientes.")
                     st.rerun()
@@ -519,11 +606,11 @@ def main():
                 """, unsafe_allow_html=True)
         return
 
-    # Botón de actualización manual
+    # Botón de actualización manual (sin recargar activos? No, mejor que recargue siempre)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
-        if st.button("🔄 ACTUALIZAR AHORA", use_container_width=True):
-            with st.spinner("Actualizando..."):
+        if st.button("🔄 ACTUALIZAR ANÁLISIS", use_container_width=True):
+            with st.spinner("Actualizando con nuevos datos de mercado..."):
                 top = actualizar_top_activos(
                     st.session_state.connector,
                     st.session_state.mercado_actual,
@@ -532,6 +619,7 @@ def main():
                 )
                 st.session_state.top_activos = top
                 st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
+                st.session_state.notificaciones_activas = set()
                 st.rerun()
 
     with col3:
@@ -564,6 +652,7 @@ def main():
         minuto_base = (minutos // 5) * 5
         tiempo_entrada = ahora.replace(minute=minuto_base, second=0, microsecond=0) + timedelta(minutes=5)
         tiempo_salida = tiempo_entrada + timedelta(minutes=5)
+        segundos_restantes = (tiempo_entrada - ahora).seconds
 
         for idx, activo in enumerate(activos_mostrar):
             with cols[idx]:
@@ -576,10 +665,22 @@ def main():
                 else:
                     color_prob = "#00FF88" if activo['senal'] == 'COMPRA' else "#FF4646" if activo['senal'] == 'VENTA' else "#AAAAAA"
                     nombre = activo['activo'].replace("-OTC", "")
+                    estrellas = "⭐" * activo['fuerza'] + "☆" * (5 - activo['fuerza'])
+
+                    # Notificación toast si es el momento (1 min antes) y no se ha mostrado aún
+                    if activo['senal'] and segundos_restantes <= 60 and segundos_restantes > 0:
+                        clave_notif = f"{activo['activo']}_{tiempo_entrada}"
+                        if clave_notif not in st.session_state.notificaciones_activas:
+                            st.toast(f"⏰ **Opera a las {tiempo_entrada.strftime('%H:%M')}** – {nombre} – Señal: {activo['senal']}", icon="📢")
+                            st.session_state.notificaciones_activas.add(clave_notif)
+
                     st.markdown(f"""
                     <div class="asset-card">
-                        <div class="asset-name">{nombre}</div>
-                        <div class="asset-price">Precio: {activo['precio']:.5f} | RSI: {activo['rsi']:.1f}</div>
+                        <div class="asset-name">{nombre} <span style="float:right; font-size:18px;">{estrellas}</span></div>
+                        <div class="asset-price">
+                            <span>Precio: {activo['precio']:.5f}</span>
+                            <span>RSI: {activo['rsi']:.1f}</span>
+                        </div>
                         <div class="asset-signal {'signal-compra' if activo['senal']=='COMPRA' else 'signal-venta' if activo['senal']=='VENTA' else 'signal-neutral'}">
                             {activo['senal'] if activo['senal'] else 'NEUTRAL'}
                         </div>
@@ -591,49 +692,50 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
 
-    # Mostrar precisión de estrategias
+    # Panel de precisión
     st.markdown("---")
     st.subheader("📊 Precisión de Estrategias")
 
     precision_estrategias = st.session_state.tracker.precision_por_estrategia()
     precision_global = st.session_state.tracker.precision_global()
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
+    cols = st.columns(5)
+    with cols[0]:
         st.metric("Ruptura", f"{precision_estrategias.get('Ruptura', 0):.1f}%")
-    with col2:
+    with cols[1]:
         st.metric("Pendiente EMA", f"{precision_estrategias.get('Pendiente EMA', 0):.1f}%")
-    with col3:
-        st.metric("ADX Continuación", f"{precision_estrategias.get('ADX Continuación', 0):.1f}%")
-    with col4:
+    with cols[2]:
+        st.metric("ADX", f"{precision_estrategias.get('ADX Continuación', 0):.1f}%")
+    with cols[3]:
         st.metric("Global", f"{precision_global:.1f}%")
+    with cols[4]:
+        st.metric("Total señales", len(st.session_state.tracker.historial))
 
-    # Botón para simular un acierto/fallo (en producción se haría con resultados reales)
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("✅ Simular Acierto (para prueba)"):
-            # Simular un acierto en todas las estrategias del primer activo
-            if st.session_state.top_activos:
-                for est in ['Ruptura', 'Pendiente EMA', 'ADX Continuación']:
-                    st.session_state.tracker.registrar(est, 'COMPRA', True)
-                st.rerun()
-    with col2:
-        if st.button("❌ Simular Fallo (para prueba)"):
-            if st.session_state.top_activos:
-                for est in ['Ruptura', 'Pendiente EMA', 'ADX Continuación']:
-                    st.session_state.tracker.registrar(est, 'COMPRA', False)
-                st.rerun()
+    # Botones de simulación (opcional, para pruebas)
+    with st.expander("🛠️ Simulación de resultados (solo pruebas)"):
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Simular acierto"):
+                if st.session_state.top_activos:
+                    for est in ['Ruptura', 'Pendiente EMA', 'ADX Continuación']:
+                        st.session_state.tracker.registrar(est, 'COMPRA', True)
+                    st.rerun()
+        with col2:
+            if st.button("❌ Simular fallo"):
+                if st.session_state.top_activos:
+                    for est in ['Ruptura', 'Pendiente EMA', 'ADX Continuación']:
+                        st.session_state.tracker.registrar(est, 'COMPRA', False)
+                    st.rerun()
 
     # Mostrar detalles de estrategias para el activo principal
     if st.session_state.top_activos:
         mejor = st.session_state.top_activos[0]
-        with st.expander(f"🔍 Ver votos de estrategias para {mejor['activo']}"):
+        with st.expander(f"🔍 Ver votos de estrategias para {mejor['activo'].replace('-OTC','')}"):
             for det in mejor['detalles_estrategias']:
                 st.write(f"**{det['nombre']}**: {det['senal']} (confianza {det['confianza']})")
 
     # Gráfico del activo principal (opcional)
-    if st.session_state.top_activos and st.checkbox("Mostrar gráfico del activo principal"):
+    if st.session_state.top_activos and st.checkbox("📉 Mostrar gráfico del activo principal"):
         mejor = st.session_state.top_activos[0]
         df_graf = mejor['df'].iloc[-50:].copy()
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
@@ -647,12 +749,13 @@ def main():
                                       increasing_line_color='#00FF88',
                                       decreasing_line_color='#FF4646'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_20'],
-                                  line=dict(color='blue')), row=1, col=1)
+                                  line=dict(color='#2962FF', width=2), name="EMA 20"), row=1, col=1)
         fig.add_trace(go.Scatter(x=df_graf.index, y=df_graf['ema_50'],
-                                  line=dict(color='orange')), row=1, col=1)
+                                  line=dict(color='#FFAA00', width=2), name="EMA 50"), row=1, col=1)
         fig.add_trace(go.Bar(x=df_graf.index, y=df_graf['volume'],
-                              marker_color='#00FF88'), row=2, col=1)
-        fig.update_layout(height=600, template="plotly_dark", showlegend=False)
+                              marker_color='#00FF88', name="Volumen"), row=2, col=1)
+        fig.update_layout(height=600, template="plotly_dark", showlegend=False,
+                          paper_bgcolor="#0A0C10", plot_bgcolor="#0A0C10")
         st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
