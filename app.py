@@ -1,9 +1,11 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN FINAL
-- 5 estrategias con umbrales reducidos
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN FINAL CON CONEXIÓN ROBUSTA
+- Reintentos de conexión con timeout
+- Mejor manejo de errores y logging
+- 5 estrategias con umbrales flexibles
 - Confirmación por mayoría simple
-- Ciclo de múltiples activos (cada 5 min sin señal cambia)
-- Interfaz con señal y volumen de compra/venta
+- Ciclo de múltiples activos
+- Interfaz profesional con señal y volumen de compra/venta
 - Soportes y resistencias en gráfico
 """
 
@@ -21,6 +23,9 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from streamlit_autorefresh import st_autorefresh
+
+# Configurar logging detallado
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Importar la API de IQ Option
 try:
@@ -144,7 +149,7 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CLASE DE CONEXIÓN IQ OPTION
+# CLASE DE CONEXIÓN IQ OPTION (MEJORADA)
 # ============================================
 class IQOptionConnector:
     def __init__(self):
@@ -154,21 +159,47 @@ class IQOptionConnector:
         self.tipo_cuenta = "PRACTICE"
         self.activos_cache = {}
         self.ordenes_pendientes = {}
+        self.max_reintentos = 3
+        self.timeout = 30  # segundos
 
     def conectar(self, email, password):
+        """
+        Intenta conectar hasta max_reintentos veces, con manejo de excepciones.
+        Retorna (True, mensaje) si éxito, (False, mensaje_error) si falla.
+        """
         if not IQ_AVAILABLE:
             return False, "Librería IQ Option no disponible."
-        try:
-            self.api = IQ_Option(email, password)
-            check, reason = self.api.connect()
-            if check:
-                self.conectado = True
-                self.balance = self.api.get_balance()
-                return True, "Conexión exitosa"
-            else:
-                return False, reason
-        except Exception as e:
-            return False, str(e)
+
+        for intento in range(1, self.max_reintentos + 1):
+            try:
+                logging.info(f"Intento de conexión {intento}/{self.max_reintentos}")
+                self.api = IQ_Option(email, password)
+                # Algunas versiones permiten setear timeout
+                if hasattr(self.api, 'set_session_timeout'):
+                    self.api.set_session_timeout(self.timeout)
+                check, reason = self.api.connect()
+                if check:
+                    self.conectado = True
+                    self.balance = self.api.get_balance()
+                    logging.info(f"Conexión exitosa en intento {intento}")
+                    return True, f"Conexión exitosa en intento {intento}"
+                else:
+                    # Si el error es de autenticación, no reintentamos
+                    if reason and ("authentication" in reason.lower() or "credenciales" in reason.lower()):
+                        return False, f"Error de autenticación: {reason}"
+                    # Si es otro error, reintentamos
+                    logging.warning(f"Intento {intento} falló: {reason}")
+                    if intento < self.max_reintentos:
+                        time.sleep(2)
+                    else:
+                        return False, f"Error tras {intento} intentos: {reason}"
+            except Exception as e:
+                logging.error(f"Excepción en intento {intento}: {str(e)}")
+                if intento < self.max_reintentos:
+                    time.sleep(2)
+                else:
+                    return False, f"Excepción en conexión: {str(e)}"
+        return False, "No se pudo conectar después de reintentos"
 
     def cambiar_balance(self, tipo="PRACTICE"):
         if self.conectado:
@@ -177,6 +208,7 @@ class IQOptionConnector:
                 self.tipo_cuenta = tipo
                 time.sleep(1)
                 self.balance = self.api.get_balance()
+                logging.info(f"Balance cambiado a {tipo}")
                 return True
             except Exception as e:
                 logging.error(f"Error al cambiar balance: {e}")
@@ -185,7 +217,10 @@ class IQOptionConnector:
 
     def actualizar_balance(self):
         if self.conectado:
-            self.balance = self.api.get_balance()
+            try:
+                self.balance = self.api.get_balance()
+            except Exception as e:
+                logging.error(f"Error al actualizar balance: {e}")
         return self.balance
 
     def obtener_saldo(self):
@@ -211,21 +246,23 @@ class IQOptionConnector:
                             activos.append(activo)
             activos = sorted(activos)[:max_activos]
             self.activos_cache[cache_key] = activos
+            logging.info(f"Activos cargados: {len(activos)}")
             return activos
         except Exception as e:
-            st.error(f"Error obteniendo activos: {e}")
+            logging.error(f"Error obteniendo activos: {e}")
             return []
 
     def obtener_velas(self, activo, intervalo=5, limite=100):
         if not self.conectado:
             return None
         try:
-            time.sleep(0.15)
+            time.sleep(0.15)  # Pausa para no saturar
             if intervalo == 5:
                 velas = self.api.get_candles(activo, 60, limite * 5, time.time())
             else:
                 velas = self.api.get_candles(activo, 60, limite, time.time())
             if not velas:
+                logging.warning(f"No se obtuvieron velas para {activo}")
                 return None
             df = pd.DataFrame(velas)
             df['datetime'] = pd.to_datetime(df['from'], unit='s')
@@ -266,10 +303,13 @@ class IQOptionConnector:
                     'monto': monto,
                     'timestamp': time.time()
                 }
+                logging.info(f"Orden ejecutada: {id_orden}")
                 return id_orden, "Orden ejecutada"
             else:
+                logging.error(f"Error al ejecutar orden: {resultado}")
                 return None, "Error al ejecutar orden"
         except Exception as e:
+            logging.error(f"Excepción en colocar_orden: {e}")
             return None, str(e)
 
     def verificar_orden(self, id_orden):
@@ -277,7 +317,8 @@ class IQOptionConnector:
         try:
             # Ejemplo: self.api.get_optioninfo(id_orden)
             # Retorna un dict con 'win' booleano y 'amount'
-            return None  # Implementar según la API
+            # Por ahora retornamos None para que no bloquee
+            return None
         except Exception as e:
             logging.error(f"Error verificando orden {id_orden}: {e}")
             return None
