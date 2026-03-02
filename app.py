@@ -1,8 +1,7 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN MEJORADA
-- Corregido error de inicialización de sesión
-- Operaciones de 1 minuto con umbrales adaptativos según fuerza y volumen
-- Filtro de consistencia de tendencia (datos del día)
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN CORREGIDA
+- Mantiene la conexión original que funcionaba
+- Estrategias mejoradas y vencimiento variable
 """
 
 import streamlit as st
@@ -44,7 +43,7 @@ st.set_page_config(
 # Autorefresh cada 5 segundos
 st_autorefresh(interval=5000, key="autorefresh")
 
-# CSS personalizado
+# CSS personalizado (igual)
 st.markdown("""
 <style>
     @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css');
@@ -142,7 +141,7 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CLASE DE CONEXIÓN IQ OPTION (MEJORADA CON REINTENTOS)
+# CLASE DE CONEXIÓN IQ OPTION (VERSIÓN ORIGINAL QUE FUNCIONABA)
 # ============================================
 class IQOptionConnector:
     def __init__(self):
@@ -152,34 +151,21 @@ class IQOptionConnector:
         self.tipo_cuenta = "PRACTICE"
         self.activos_cache = {}
         self.ordenes_pendientes = {}
-        self.max_reintentos = 3
-        self.timeout = 30
 
     def conectar(self, email, password):
         if not IQ_AVAILABLE:
             return False, "Librería IQ Option no disponible."
-        for intento in range(1, self.max_reintentos + 1):
-            try:
-                self.api = IQ_Option(email, password)
-                check, reason = self.api.connect()
-                if check:
-                    self.conectado = True
-                    self.balance = self.api.get_balance()
-                    return True, f"Conexión exitosa en intento {intento}"
-                else:
-                    if "authentication" in reason.lower() or "credenciales" in reason.lower():
-                        return False, f"Error de autenticación: {reason}"
-                    if intento < self.max_reintentos:
-                        time.sleep(2)
-                    else:
-                        return False, f"Error tras {intento} intentos: {reason}"
-            except Exception as e:
-                error_msg = str(e)
-                if intento < self.max_reintentos:
-                    time.sleep(2)
-                else:
-                    return False, f"Excepción en conexión: {error_msg}"
-        return False, "No se pudo conectar después de reintentos"
+        try:
+            self.api = IQ_Option(email, password)
+            check, reason = self.api.connect()
+            if check:
+                self.conectado = True
+                self.balance = self.api.get_balance()
+                return True, "Conexión exitosa"
+            else:
+                return False, reason
+        except Exception as e:
+            return False, str(e)
 
     def cambiar_balance(self, tipo="PRACTICE"):
         if self.conectado:
@@ -491,43 +477,37 @@ def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
     """
     Retorna (hay_retroceso, vencimiento_recomendado)
     vencimiento: 1 o 5 minutos
-    Incorpora filtros de volumen y consistencia de tendencia.
     """
     if df is None or len(df) < 20:
         return False, 5
     ult = df.iloc[-1]
     soportes, resistencias = detectar_soportes_resistencias(df)
 
-    # --- Filtro de consistencia de tendencia (datos del día) ---
-    # Verificar que la tendencia se mantiene en las últimas 10 velas
+    # Filtro de consistencia
     pendiente_larga = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-10]) / 10
     if tendencia == 'alcista' and pendiente_larga <= 0:
-        return False, 5  # La tendencia no es consistente
+        return False, 5
     if tendencia == 'bajista' and pendiente_larga >= 0:
         return False, 5
 
-    # Evitar zonas de sobrecompra/venta extremas
     if ult['rsi'] > 75 or ult['rsi'] < 25:
         return False, 5
 
-    # --- Decisión de vencimiento basada en fuerza y volumen ---
+    # Decisión de vencimiento basada en fuerza y volumen
     if fuerza >= 75:
-        # Muy fuerte: cualquier volumen es aceptable
         if ult['volume_ratio'] >= 1.0:
-            # Verificar que no haya señal de retroceso inminente
             cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
             cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
             if not cerca_soporte and not cerca_resistencia:
-                return False, 1  # Operación rápida
+                return False, 1
     elif 55 <= fuerza < 75:
-        # Fuerte: requiere volumen significativo
         if ult['volume_ratio'] >= 1.5:
             cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
             cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
             if not cerca_soporte and not cerca_resistencia:
                 return False, 1
 
-    # --- Lógica de retroceso para operaciones de 5 minutos ---
+    # Lógica de retroceso para 5 minutos
     if tendencia == 'alcista':
         soporte_cercano = min([s for s in soportes if s < ult['close']], default=None)
         if soporte_cercano and (ult['close'] - soporte_cercano) < 0.002 * ult['close']:
@@ -541,7 +521,7 @@ def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
         if ult['close'] < ult['ema_20'] and (ult['ema_20'] - ult['close']) < 0.0015 * ult['close']:
             return True, 5
 
-    return False, 5  # Por defecto, 5 minutos si no hay condición especial
+    return False, 5
 
 # ============================================
 # CLASE PARA GESTIONAR OPERACIONES Y LÍMITES
@@ -551,7 +531,7 @@ class TradingManager:
         self.activo_actual = None
         self.estado = "Detenido"
         self.operaciones_hoy = 0
-        self.ultimo_cambio_activo = time.time()  # Inicializado correctamente
+        self.ultimo_cambio_activo = time.time()
         self.historial = []
         self.log_eventos = []
         self.ordenes_pendientes = {}
@@ -611,7 +591,6 @@ class TradingManager:
 def ciclo_principal(connector, manager, config):
     tiempo_actual = time.time()
 
-    # Verificar que el manager esté correctamente inicializado
     if not hasattr(manager, 'ultimo_cambio_activo'):
         manager.ultimo_cambio_activo = tiempo_actual
 
@@ -650,7 +629,6 @@ def ciclo_principal(connector, manager, config):
                 mejores_activos.append((act, fuerza, tendencia, tipo, df))
 
         if mejores_activos:
-            # Ordenar por fuerza descendente
             mejores_activos.sort(key=lambda x: x[1], reverse=True)
             mejor = mejores_activos[0]
             manager.activo_actual = mejor[0]
@@ -675,10 +653,8 @@ def ciclo_principal(connector, manager, config):
     tendencia, fuerza, tipo = detectar_tendencia(df)
     ult = df.iloc[-1]
 
-    # Determinar tipo de volumen (compra/venta)
     volumen_tipo = "COMPRA" if ult['close'] > ult['open'] else "VENTA"
 
-    # Guardar en session_state
     st.session_state.tendencia_actual = tendencia
     st.session_state.fuerza_actual = fuerza
     st.session_state.tipo_tendencia = tipo
@@ -696,12 +672,10 @@ def ciclo_principal(connector, manager, config):
     if manager.estado == "Analizando":
         decision, confianza = confirmar_operacion(df, tendencia, fuerza)
         if decision != 0:
-            # Evaluar retroceso y vencimiento con la nueva lógica
             hay_retroceso, vencimiento = evaluar_retroceso_y_vencimiento(df, tendencia, fuerza)
             direccion = "COMPRA" if decision == 1 else "VENTA"
 
             if vencimiento == 1:
-                # Operación rápida de 1 minuto
                 id_orden, msg = connector.colocar_orden(
                     manager.activo_actual,
                     direccion,
@@ -722,8 +696,7 @@ def ciclo_principal(connector, manager, config):
                 else:
                     manager.agregar_evento(f"❌ Error al ejecutar orden 1m: {msg}", "❌")
             else:
-                # Operación a 5 minutos: esperar retroceso
-                precio_entrada = None
+                # Preparar retroceso para 5 minutos
                 if hay_retroceso:
                     if tendencia == 'alcista':
                         soportes, _ = detectar_soportes_resistencias(df)
@@ -784,7 +757,7 @@ def ciclo_principal(connector, manager, config):
 # ============================================
 def main():
     st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### Modo autónomo con vencimiento variable (1/5 min) | Filtros de volumen y consistencia")
+    st.markdown("#### Modo autónomo con vencimiento variable (1/5 min) | Conexión estable")
     st.markdown("---")
 
     # Inicializar estado de sesión
@@ -812,7 +785,6 @@ def main():
         st.session_state.senal_actual = 'NEUTRO'
         st.session_state.activo_actual = 'Ninguno'
 
-    # Panel superior de configuración
     with st.container():
         col1, col2, col3, col4 = st.columns(4)
         with col1:
