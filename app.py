@@ -1,9 +1,11 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN OPTIMIZADA
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN OPTIMIZADA CON 4 ESTRATEGIAS
 Funcionalidades clave:
-- Selección manual de hasta 5 activos (con buscador en tiempo real)
-- 3 estrategias de tendencia independientes con acceso a volumen y fuerza
-- Ensemble ponderado (IA) que combina las estrategias para máxima precisión
+- Selección manual de hasta 2 activos (con buscador)
+- Opción automática: el bot elige el activo más estable
+- 4 estrategias independientes con acceso a volumen y fuerza
+- Ensemble ponderado (IA) para máxima precisión
+- Control de número de operaciones
 - Modo Automático y Modo Señales
 - Panel de control con balance, operaciones, ganancias/pérdidas
 - Notificaciones 1 minuto antes con hora exacta
@@ -49,7 +51,7 @@ st.set_page_config(
 # Autorefresh cada 10 segundos (solo para mantener el reloj y datos actualizados)
 st_autorefresh(interval=10000, key="autorefresh")
 
-# CSS personalizado (mantenemos el mismo estilo profesional)
+# CSS personalizado
 st.markdown("""
 <style>
     .stApp {
@@ -154,7 +156,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Zona horaria Ecuador
+# Zona horaria Ecuador (puedes cambiarla a la del broker si es necesario)
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
@@ -166,7 +168,7 @@ class IQOptionConnector:
         self.conectado = False
         self.balance = 0
         self.tipo_cuenta = "PRACTICE"
-        self.activos_cache = {}  # cache para activos disponibles
+        self.activos_cache = {}
 
     def conectar(self, email, password):
         if not IQ_AVAILABLE:
@@ -176,7 +178,7 @@ class IQOptionConnector:
             check, reason = self.api.connect()
             if check:
                 self.conectado = True
-                self.balance = self.api.get_balance()
+                self.actualizar_balance()
                 return True, "Conexión exitosa"
             else:
                 return False, reason
@@ -186,7 +188,9 @@ class IQOptionConnector:
     def cambiar_balance(self, tipo="PRACTICE"):
         if self.conectado:
             self.tipo_cuenta = tipo
-            return self.api.change_balance(tipo)
+            self.api.change_balance(tipo)
+            self.actualizar_balance()
+            return True
         return False
 
     def actualizar_balance(self):
@@ -198,14 +202,9 @@ class IQOptionConnector:
         return self.balance
 
     def obtener_activos_disponibles(self, mercado="otc", max_activos=200, force_refresh=False):
-        """
-        Obtiene la lista completa de activos disponibles para el mercado seleccionado.
-        Con cache para no llamar a la API constantemente.
-        """
         if not self.conectado:
             return []
         cache_key = f"{mercado}_{max_activos}"
-        # Si ya tenemos en cache y no se fuerza refresco, devolvemos cache
         if not force_refresh and cache_key in self.activos_cache:
             return self.activos_cache[cache_key]
 
@@ -232,7 +231,7 @@ class IQOptionConnector:
         if not self.conectado:
             return None
         try:
-            time.sleep(0.15)  # Pequeña pausa para no saturar
+            time.sleep(0.15)
             if intervalo == 5:
                 velas = self.api.get_candles(activo, 60, limite * 5, time.time())
             else:
@@ -293,10 +292,15 @@ def calcular_indicadores(df):
     df['adx_neg'] = adx.adx_neg()
     bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
     df['bb_width'] = (bb.bollinger_hband() - bb.bollinger_lband()) / df['close'] * 100
+    # MACD
+    macd = ta.trend.MACD(df['close'])
+    df['macd'] = macd.macd()
+    df['macd_signal'] = macd.macd_signal()
+    df['macd_diff'] = macd.macd_diff()
     return df
 
 # ============================================
-# ESTRATEGIAS DE TENDENCIA INDEPENDIENTES
+# 4 ESTRATEGIAS DE TENDENCIA INDEPENDIENTES
 # ============================================
 def estrategia_ruptura(df):
     """Estrategia 1: Ruptura de máximos/mínimos recientes con volumen"""
@@ -351,12 +355,24 @@ def estrategia_adx_volumen(df):
             return 'VENTA', min(95, confianza)
     return None, 0
 
+def estrategia_macd(df):
+    """Estrategia 4: Cruce de MACD con volumen"""
+    if df is None or len(df) < 30:
+        return None, 0
+    ult = df.iloc[-1]
+    prev = df.iloc[-2]
+    if prev['macd'] < prev['macd_signal'] and ult['macd'] > ult['macd_signal'] and ult['volume_ratio'] > 1.1:
+        return 'COMPRA', 70
+    elif prev['macd'] > prev['macd_signal'] and ult['macd'] < ult['macd_signal'] and ult['volume_ratio'] > 1.1:
+        return 'VENTA', 70
+    return None, 0
+
 # ============================================
-# ENSEMBLE PONDERADO (IA)
+# ENSEMBLE PONDERADO (IA) con 4 estrategias
 # ============================================
 def ensemble_ia(df):
     """
-    Combina las tres estrategias usando pesos basados en volumen y fuerza.
+    Combina las cuatro estrategias usando pesos basados en volumen y fuerza.
     Retorna señal final y probabilidad.
     """
     if df is None:
@@ -366,6 +382,7 @@ def ensemble_ia(df):
     s1, c1 = estrategia_ruptura(df)
     s2, c2 = estrategia_pendiente_ema(df)
     s3, c3 = estrategia_adx_volumen(df)
+    s4, c4 = estrategia_macd(df)
 
     # Pesos dinámicos: se basan en el volumen y ADX
     ult = df.iloc[-1]
@@ -379,6 +396,8 @@ def ensemble_ia(df):
         votos.append((s2, c2 * peso_adx))
     if s3:
         votos.append((s3, c3 * (peso_volumen + peso_adx) / 2))
+    if s4:
+        votos.append((s4, c4 * peso_volumen))
 
     if not votos:
         return None, 0
@@ -410,8 +429,8 @@ def analizar_activo(activo, connector):
 
     senal, prob = ensemble_ia(df)
     ult = df.iloc[-1]
-    # Score para ordenamiento interno (no se usa ahora, pero lo dejamos)
-    score = prob * (1 + ult['volume_ratio']/2) if senal else 0
+    # Score para ordenamiento interno (basado en probabilidad, volumen y ADX)
+    score = prob * (1 + ult['volume_ratio']) * (1 + ult['adx']/50) if senal else 0
 
     return {
         'activo': activo,
@@ -431,6 +450,8 @@ def analizar_activo(activo, connector):
 class TradeLogger:
     def __init__(self):
         self.trades = []
+        self.operaciones_hoy = 0
+        self.fecha_actual = datetime.now().date()
 
     def agregar_trade(self, activo, direccion, monto, resultado, ganancia):
         self.trades.append({
@@ -441,10 +462,16 @@ class TradeLogger:
             'resultado': resultado,
             'ganancia': ganancia
         })
+        # Actualizar contador diario
+        hoy = datetime.now().date()
+        if hoy != self.fecha_actual:
+            self.operaciones_hoy = 0
+            self.fecha_actual = hoy
+        self.operaciones_hoy += 1
 
     def obtener_resumen(self):
         if not self.trades:
-            return {'total_operaciones': 0, 'ganadas': 0, 'perdidas': 0, 'ganancia_neta': 0}
+            return {'total_operaciones': 0, 'ganadas': 0, 'perdidas': 0, 'ganancia_neta': 0, 'operaciones_hoy': self.operaciones_hoy}
         df = pd.DataFrame(self.trades)
         ganadas = df[df['resultado'] == 'ganada'].shape[0]
         perdidas = df[df['resultado'] == 'perdida'].shape[0]
@@ -453,15 +480,20 @@ class TradeLogger:
             'total_operaciones': len(self.trades),
             'ganadas': ganadas,
             'perdidas': perdidas,
-            'ganancia_neta': ganancia_neta
+            'ganancia_neta': ganancia_neta,
+            'operaciones_hoy': self.operaciones_hoy
         }
+
+    def reiniciar_contador_diario(self):
+        self.operaciones_hoy = 0
+        self.fecha_actual = datetime.now().date()
 
 # ============================================
 # INTERFAZ PRINCIPAL
 # ============================================
 def main():
     st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### Selecciona hasta 5 activos | IA Ensemble con Volumen y Fuerza")
+    st.markdown("#### 4 Estrategias con IA | Hasta 2 activos | Control de operaciones")
     st.markdown("---")
 
     # Inicializar estado de sesión
@@ -487,8 +519,12 @@ def main():
         st.session_state.mercado_actual = "otc"
     if 'lista_activos_completa' not in st.session_state:
         st.session_state.lista_activos_completa = []
+    if 'modo_seleccion' not in st.session_state:
+        st.session_state.modo_seleccion = "Manual"  # o "Automático"
+    if 'max_operaciones' not in st.session_state:
+        st.session_state.max_operaciones = 10  # límite diario por defecto
 
-    # Barra lateral (configuración y conexión)
+    # Barra lateral
     with st.sidebar:
         st.image("https://i.imgur.com/6QhQx8L.png", width=200)
         st.markdown("### 🔐 Conexión a IQ Option")
@@ -503,7 +539,7 @@ def main():
                         if ok:
                             st.session_state.conectado = True
                             st.success(f"✅ Conectado - Saldo: ${st.session_state.connector.obtener_saldo():.2f}")
-                            # Cargar lista de activos automáticamente
+                            # Cargar lista de activos
                             with st.spinner("Cargando activos disponibles..."):
                                 st.session_state.lista_activos_completa = st.session_state.connector.obtener_activos_disponibles(
                                     st.session_state.mercado_actual, max_activos=200, force_refresh=True
@@ -539,12 +575,11 @@ def main():
             nuevo_mercado = "otc" if "OTC" in mercado else "forex"
             if nuevo_mercado != st.session_state.mercado_actual:
                 st.session_state.mercado_actual = nuevo_mercado
-                # Recargar lista de activos al cambiar de mercado
                 with st.spinner("Cargando activos del nuevo mercado..."):
                     st.session_state.lista_activos_completa = st.session_state.connector.obtener_activos_disponibles(
                         st.session_state.mercado_actual, max_activos=200, force_refresh=True
                     )
-                st.session_state.activos_seleccionados = []  # Limpiar selección
+                st.session_state.activos_seleccionados = []
                 st.rerun()
 
             # Tipo de cuenta
@@ -574,58 +609,99 @@ def main():
                 min_value=1.0 if cuenta_real else 0.1,
                 max_value=1000.0 if cuenta_real else 100.0,
                 value=st.session_state.monto_operacion,
-                step=1.0,
-                help="Cantidad a arriesgar en cada trade"
+                step=1.0
+            )
+
+            # Límite de operaciones diarias
+            st.session_state.max_operaciones = st.number_input(
+                "Límite de operaciones por día",
+                min_value=1,
+                max_value=100,
+                value=st.session_state.max_operaciones,
+                step=1
             )
 
             st.markdown("---")
             st.markdown("### 📋 Selección de Activos")
 
-            # Mostrar cantidad de activos disponibles
-            st.caption(f"Total activos disponibles: {len(st.session_state.lista_activos_completa)}")
-
-            # Buscador
-            busqueda = st.text_input("🔍 Buscar activo", placeholder="Ej: EURUSD", key="buscador")
-
-            # Filtrar lista según búsqueda
-            if busqueda:
-                lista_filtrada = [a for a in st.session_state.lista_activos_completa if busqueda.upper() in a.upper()]
-            else:
-                lista_filtrada = st.session_state.lista_activos_completa
-
-            # Selector múltiple (hasta 5)
-            seleccion = st.multiselect(
-                "Selecciona hasta 5 activos",
-                options=lista_filtrada,
-                default=st.session_state.activos_seleccionados,
-                max_selections=5,
-                format_func=lambda x: x.replace("-OTC", "")
+            # Modo de selección
+            modo_sel = st.radio(
+                "Modo de selección",
+                ["Manual", "Automático (elige el mejor)"],
+                index=0 if st.session_state.modo_seleccion == "Manual" else 1,
+                horizontal=True
             )
+            st.session_state.modo_seleccion = modo_sel
 
-            # Actualizar la selección en session_state
-            if seleccion != st.session_state.activos_seleccionados:
-                st.session_state.activos_seleccionados = seleccion
-                # Forzar un nuevo análisis de los activos seleccionados
-                st.session_state.resultados_activos = {}
-                st.session_state.ultima_actualizacion = None
-                st.rerun()
+            if modo_sel == "Manual":
+                # Mostrar cantidad de activos disponibles
+                st.caption(f"Total activos disponibles: {len(st.session_state.lista_activos_completa)}")
+
+                # Buscador
+                busqueda = st.text_input("🔍 Buscar activo", placeholder="Ej: EURUSD", key="buscador")
+
+                # Filtrar lista según búsqueda
+                if busqueda:
+                    lista_filtrada = [a for a in st.session_state.lista_activos_completa if busqueda.upper() in a.upper()]
+                else:
+                    lista_filtrada = st.session_state.lista_activos_completa
+
+                # Selector múltiple (hasta 2)
+                seleccion = st.multiselect(
+                    "Selecciona hasta 2 activos",
+                    options=lista_filtrada,
+                    default=st.session_state.activos_seleccionados,
+                    max_selections=2,
+                    format_func=lambda x: x.replace("-OTC", "")
+                )
+
+                # Actualizar la selección
+                if seleccion != st.session_state.activos_seleccionados:
+                    st.session_state.activos_seleccionados = seleccion
+                    st.session_state.resultados_activos = {}
+                    st.session_state.ultima_actualizacion = None
+                    st.rerun()
+            else:
+                # Modo automático: aquí no mostramos selector, solo un botón para iniciar análisis automático
+                st.info("El bot analizará todos los activos y elegirá el más estable.")
+                if st.button("🤖 Iniciar análisis automático", use_container_width=True):
+                    with st.spinner("Analizando todos los activos para encontrar el mejor..."):
+                        mejores = []
+                        for act in st.session_state.lista_activos_completa:
+                            res = analizar_activo(act, st.session_state.connector)
+                            if res and res['senal']:
+                                mejores.append((res['score'], act, res))
+                            time.sleep(0.1)
+                        if mejores:
+                            mejores.sort(reverse=True)
+                            # Tomar el mejor (o hasta 2 mejores)
+                            mejor_activo = mejores[0][2]
+                            st.session_state.activos_seleccionados = [mejor_activo['activo']]
+                            st.session_state.resultados_activos = {mejor_activo['activo']: mejor_activo}
+                            if len(mejores) > 1 and mejores[1][0] > 50:  # si el segundo también tiene buen score
+                                segundo = mejores[1][2]
+                                st.session_state.activos_seleccionados.append(segundo['activo'])
+                                st.session_state.resultados_activos[segundo['activo']] = segundo
+                            st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
+                            st.success(f"✅ Mejor activo encontrado: {mejor_activo['activo']}")
+                        else:
+                            st.warning("No se encontraron activos con señales claras.")
+                        st.rerun()
 
             # Botón para analizar ahora
-            if st.button("🔄 ANALIZAR AHORA", use_container_width=True):
-                if st.session_state.activos_seleccionados:
-                    with st.spinner("Analizando activos seleccionados..."):
-                        nuevos_resultados = {}
-                        for act in st.session_state.activos_seleccionados:
-                            res = analizar_activo(act, st.session_state.connector)
-                            if res:
-                                nuevos_resultados[act] = res
-                            time.sleep(0.2)
-                        st.session_state.resultados_activos = nuevos_resultados
-                        st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
-                        st.session_state.notificadas = set()
-                        st.success("✅ Análisis completado")
-                else:
-                    st.warning("Selecciona al menos un activo")
+            if st.session_state.activos_seleccionados and st.button("🔄 ANALIZAR AHORA", use_container_width=True):
+                with st.spinner("Analizando activos seleccionados..."):
+                    nuevos_resultados = {}
+                    for act in st.session_state.activos_seleccionados:
+                        res = analizar_activo(act, st.session_state.connector)
+                        if res:
+                            nuevos_resultados[act] = res
+                        time.sleep(0.2)
+                    st.session_state.resultados_activos = nuevos_resultados
+                    st.session_state.ultima_actualizacion = datetime.now(ecuador_tz)
+                    st.session_state.notificadas = set()
+                    st.success("✅ Análisis completado")
+                    st.rerun()
 
     # Verificar conexión
     if not st.session_state.conectado:
@@ -634,7 +710,7 @@ def main():
 
     # Panel de control superior
     resumen = st.session_state.logger.obtener_resumen()
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("Balance", f"${st.session_state.connector.obtener_saldo():.2f}")
     with col2:
@@ -643,6 +719,8 @@ def main():
         st.metric("Ganadas", resumen['ganadas'])
     with col4:
         st.metric("Ganancia neta", f"${resumen['ganancia_neta']:.2f}")
+    with col5:
+        st.metric("Operaciones hoy", f"{resumen['operaciones_hoy']} / {st.session_state.max_operaciones}")
 
     # Reloj en tiempo real
     ahora = datetime.now(ecuador_tz)
@@ -667,14 +745,11 @@ def main():
     # Mostrar resultados de los activos seleccionados
     if st.session_state.activos_seleccionados:
         st.markdown("## 📊 ACTIVOS SELECCIONADOS")
-
-        # Crear columnas dinámicamente según la cantidad de activos (hasta 5)
         num_activos = len(st.session_state.activos_seleccionados)
         cols = st.columns(num_activos)
 
         for idx, activo in enumerate(st.session_state.activos_seleccionados):
             with cols[idx]:
-                # Si tenemos resultado para este activo, mostrarlo
                 if activo in st.session_state.resultados_activos:
                     a = st.session_state.resultados_activos[activo]
                     nombre = activo.replace("-OTC", "")
@@ -688,15 +763,16 @@ def main():
                     tiempo_salida = tiempo_entrada + timedelta(minutes=5)
                     segundos_rest = (tiempo_entrada - ahora).seconds
 
-                    # Notificación 1 min antes para cada activo con señal
+                    # Notificación 1 min antes
                     if a['senal'] and segundos_rest <= 60 and segundos_rest > 0:
                         clave = f"{activo}_{tiempo_entrada}"
                         if clave not in st.session_state.notificadas:
                             st.toast(f"📢 **{nombre}** – {a['senal']} a las {tiempo_entrada.strftime('%H:%M')}", icon="⏰")
                             st.session_state.notificadas.add(clave)
 
-                    # Modo automático: ejecutar orden si hay señal y estamos en modo automático
-                    if st.session_state.modo_operacion == "🤖 Automático" and a['senal'] and segundos_rest <= 10:
+                    # Modo automático: ejecutar orden si hay señal, no se ha alcanzado el límite y faltan 10 segundos
+                    if (st.session_state.modo_operacion == "🤖 Automático" and a['senal'] and
+                        segundos_rest <= 10 and resumen['operaciones_hoy'] < st.session_state.max_operaciones):
                         resultado, msg = st.session_state.connector.colocar_orden(
                             activo,
                             a['senal'],
@@ -705,13 +781,15 @@ def main():
                         )
                         if resultado:
                             st.success(f"✅ Orden ejecutada: {a['senal']} en {nombre}")
+                            # Aquí deberías verificar el resultado real después de 5 minutos, pero por ahora simulamos
                             st.session_state.logger.agregar_trade(
                                 activo,
                                 a['senal'],
                                 st.session_state.monto_operacion,
-                                'ganada',  # En producción, verificar resultado real
+                                'ganada',  # En producción, verificar
                                 st.session_state.monto_operacion * 0.8
                             )
+                            st.rerun()
                         else:
                             st.error(f"❌ Error en {nombre}: {msg}")
 
@@ -731,7 +809,6 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                 else:
-                    # Activo aún no analizado
                     st.markdown(f"""
                     <div class="asset-card" style="opacity:0.5;">
                         <div class="asset-name">{activo.replace('-OTC','')}</div>
@@ -739,7 +816,7 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
 
-        # Botón para analizar todos los seleccionados (útil si se añadieron nuevos)
+        # Botón para analizar todos los seleccionados
         if st.button("🔄 Analizar todos los seleccionados"):
             with st.spinner("Analizando..."):
                 nuevos_resultados = {}
@@ -754,7 +831,7 @@ def main():
                 st.rerun()
 
     else:
-        st.info("👈 Selecciona activos en la barra lateral para comenzar el análisis.")
+        st.info("👈 Selecciona activos o usa el modo automático en la barra lateral.")
 
     # Historial de operaciones
     with st.expander("📜 Ver historial de operaciones"):
@@ -764,7 +841,7 @@ def main():
         else:
             st.info("Aún no hay operaciones registradas.")
 
-    # Botón manual de actualización (útil si el autorefresh no funciona)
+    # Botón manual de actualización
     if st.button("🔄 Actualizar ahora (manual)"):
         st.rerun()
 
