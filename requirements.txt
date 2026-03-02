@@ -12,6 +12,5 @@ catboost==1.2.7
 joblib==1.4.2
 python-dotenv==1.0.1
 streamlit-autorefresh==1.0.1
-git+https://github.com/cleitonleonel/iqoptionapi.git@master#egg=iqoptionapi
+git+https://github.com/cleitonleonel/iqoptionapi.git
 rich<14
-websocket-client==1.6.3
