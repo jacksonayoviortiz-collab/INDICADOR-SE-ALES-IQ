@@ -1,12 +1,13 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN FINAL
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN COMPLETA
 Características:
 - 5 estrategias independientes con acceso a volumen y fuerza
 - IA ensemble que pondera las estrategias para máxima precisión
-- Detección de tendencias y retrocesos
+- Detección de tendencias fuertes (>50%), débiles (35-50%) y microtendencias (25-35%)
+- Operación en retrocesos dentro de la tendencia, con confirmación de IA
 - Resultados reales de operaciones (consulta estado después de 5 min)
 - Cambio correcto entre cuenta Demo/Real
-- Interfaz profesional con gráfico en tiempo real y animaciones
+- Interfaz profesional con gráfico en tiempo real, iconos y animaciones
 - Límite de operaciones diarias configurable
 """
 
@@ -295,16 +296,17 @@ def calcular_indicadores(df):
     return df
 
 # ============================================
-# DETECCIÓN DE TENDENCIA Y FUERZA
+# DETECCIÓN DE TENDENCIA Y FUERZA (AMPLIADA)
 # ============================================
 def detectar_tendencia(df):
     """
     Detecta si el mercado es alcista, bajista o lateral.
-    Retorna: ('alcista', fuerza) o ('bajista', fuerza) o ('lateral', 0)
-    fuerza: 1-100
+    Retorna: ('alcista', fuerza, tipo) o ('bajista', fuerza, tipo) o ('lateral', 0, 'lateral')
+    fuerza: 0-100
+    tipo: 'fuerte', 'débil', 'micro', 'lateral'
     """
     if df is None or len(df) < 50:
-        return 'lateral', 0
+        return 'lateral', 0, 'lateral'
 
     ult = df.iloc[-1]
     pendiente_ema20 = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-10]) / 10
@@ -333,18 +335,29 @@ def detectar_tendencia(df):
     if adx_fuerte:
         fuerza += 20
 
+    # Determinar dirección
+    direccion = 'lateral'
     if (pendiente_ema20 > 0 and pendiente_ema50 > 0) or (sobre_ema20 and sobre_ema50 and sobre_ema200):
-        return 'alcista', min(100, fuerza)
+        direccion = 'alcista'
     elif (pendiente_ema20 < 0 and pendiente_ema50 < 0) or (not sobre_ema20 and not sobre_ema50 and not sobre_ema200):
-        return 'bajista', min(100, fuerza)
+        direccion = 'bajista'
+
+    # Clasificar por fuerza
+    if direccion == 'lateral':
+        return 'lateral', 0, 'lateral'
+    elif fuerza >= 50:
+        return direccion, min(100, fuerza), 'fuerte'
+    elif fuerza >= 35:
+        return direccion, min(100, fuerza), 'débil'
+    elif fuerza >= 25:
+        return direccion, min(100, fuerza), 'micro'
     else:
-        return 'lateral', 0
+        return direccion, min(100, fuerza), 'muy débil'
 
 # ============================================
 # ESTRATEGIAS DE CONFIRMACIÓN (5 independientes)
 # ============================================
 def estrategia_1_ruptura_con_volumen(df):
-    """Estrategia 1: Ruptura de máximo/mínimo reciente con volumen alto"""
     if df is None or len(df) < 15:
         return 0, 0
     ult = df.iloc[-1]
@@ -357,7 +370,6 @@ def estrategia_1_ruptura_con_volumen(df):
     return 0, 0
 
 def estrategia_2_pendiente_ema_adx(df):
-    """Estrategia 2: Pendiente de EMA + ADX alto"""
     if df is None or len(df) < 20:
         return 0, 0
     ult = df.iloc[-1]
@@ -369,7 +381,6 @@ def estrategia_2_pendiente_ema_adx(df):
     return 0, 0
 
 def estrategia_3_bandas_bollinger_rsi(df):
-    """Estrategia 3: Bandas de Bollinger + RSI extremo"""
     if df is None or len(df) < 20:
         return 0, 0
     ult = df.iloc[-1]
@@ -380,7 +391,6 @@ def estrategia_3_bandas_bollinger_rsi(df):
     return 0, 0
 
 def estrategia_4_macd_histograma(df):
-    """Estrategia 4: Cruce de MACD con volumen"""
     if df is None or len(df) < 30:
         return 0, 0
     macd = ta.trend.MACD(df['close'])
@@ -393,15 +403,12 @@ def estrategia_4_macd_histograma(df):
     return 0, 0
 
 def estrategia_5_parabolic_sar_volumen(df):
-    """Estrategia 5: Parabolic SAR + Volumen (detección de reversión)"""
     if df is None or len(df) < 20:
         return 0, 0
     ult = df.iloc[-1]
     prev = df.iloc[-2]
-    # Señal de compra: SAR estaba por encima del precio y ahora pasa por debajo (cambio a alcista) con volumen
     if prev['psar'] > prev['close'] and ult['psar'] < ult['close'] and ult['volume_ratio'] > 1.3:
         return 1, 75
-    # Señal de venta: SAR estaba por debajo y ahora pasa por encima (cambio a bajista) con volumen
     elif prev['psar'] < prev['close'] and ult['psar'] > ult['close'] and ult['volume_ratio'] > 1.3:
         return -1, 75
     return 0, 0
@@ -410,10 +417,6 @@ def estrategia_5_parabolic_sar_volumen(df):
 # IA DE CONFIRMACIÓN (Ensemble ponderado)
 # ============================================
 def confirmar_operacion(df, tendencia, fuerza_tendencia):
-    """
-    Usa las 5 estrategias para decidir si operar en la dirección de la tendencia.
-    Retorna: (decisión, confianza) donde decisión es 1 (compra), -1 (venta) o 0 (no operar)
-    """
     resultados = [
         estrategia_1_ruptura_con_volumen(df),
         estrategia_2_pendiente_ema_adx(df),
@@ -441,9 +444,10 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
     elif tendencia == 'bajista':
         venta_peso *= peso_tendencia
 
-    if compra_peso > venta_peso and compra_peso > 150:
+    umbral_minimo = 120  # Ajustable para permitir más o menos operaciones
+    if compra_peso > venta_peso and compra_peso > umbral_minimo:
         return 1, int(compra_peso / 3)
-    elif venta_peso > compra_peso and venta_peso > 150:
+    elif venta_peso > compra_peso and venta_peso > umbral_minimo:
         return -1, int(venta_peso / 3)
     else:
         return 0, 0
@@ -452,10 +456,6 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
 # CÁLCULO DE RETROCESO IDEAL
 # ============================================
 def calcular_retroceso(df, tendencia):
-    """
-    Estima hasta dónde podría retroceder el precio dentro de la tendencia.
-    Retorna precio objetivo de entrada.
-    """
     if df is None or len(df) < 20:
         return None
     ult = df.iloc[-1]
@@ -553,8 +553,8 @@ def ciclo_principal(connector, manager, config):
 
     # Si no tenemos activo actual, buscar uno
     if manager.activo_actual is None:
-        manager.estado = "🔍 Buscando activo..."
-        manager.agregar_evento("Buscando activo con tendencia...", "🔍")
+        manager.estado = "🔍 Buscando activos con tendencias..."
+        manager.agregar_evento("Buscando activos con tendencias fuertes, débiles o microtendencias...", "🔍")
         activos = connector.obtener_activos_disponibles(config['mercado'], max_activos=100)
         for act in activos[:20]:
             df = connector.obtener_velas(act, intervalo=5, limite=100)
@@ -563,14 +563,14 @@ def ciclo_principal(connector, manager, config):
             df = calcular_indicadores(df)
             if df is None:
                 continue
-            tendencia, fuerza = detectar_tendencia(df)
-            if tendencia != 'lateral' and fuerza > 50:
+            tendencia, fuerza, tipo = detectar_tendencia(df)
+            if tendencia != 'lateral' and fuerza >= 25:
                 manager.activo_actual = act
-                manager.agregar_evento(f"✅ Activo encontrado: {act} - Tendencia {tendencia} (fuerza {fuerza}%)", "✅")
+                manager.agregar_evento(f"✅ Activo encontrado: {act} - Tendencia {tendencia} ({tipo}) - Fuerza {fuerza}%", "✅")
                 manager.estado = "Analizando"
                 break
         if manager.activo_actual is None:
-            manager.agregar_evento("⚠️ No se encontró ningún activo con tendencia fuerte. Reintentando en 5 min...", "⚠️")
+            manager.agregar_evento("⚠️ No se encontró ningún activo con tendencia. Reintentando en 5 min...", "⚠️")
             return
 
     # Analizar el activo actual
@@ -584,17 +584,19 @@ def ciclo_principal(connector, manager, config):
         manager.activo_actual = None
         return
 
-    tendencia, fuerza = detectar_tendencia(df)
+    tendencia, fuerza, tipo = detectar_tendencia(df)
     ult = df.iloc[-1]
 
     # Guardar en session_state para la interfaz
     st.session_state.tendencia_actual = tendencia
     st.session_state.fuerza_actual = fuerza
+    st.session_state.tipo_tendencia = tipo
     st.session_state.precio_actual = ult['close']
+    st.session_state.volumen_actual = ult['volume_ratio']
 
-    # Si el mercado se vuelve lateral o la fuerza baja, cambiar de activo
-    if tendencia == 'lateral' or fuerza < 40:
-        manager.agregar_evento(f"🔄 Mercado lateral en {manager.activo_actual}. Buscando otro activo...", "🔄")
+    # Si el mercado se vuelve lateral o la fuerza es demasiado baja (<25), cambiar de activo
+    if tendencia == 'lateral' or fuerza < 25:
+        manager.agregar_evento(f"🔄 Mercado sin tendencia clara en {manager.activo_actual}. Buscando otro activo...", "🔄")
         manager.activo_actual = None
         manager.estado = "Buscando"
         return
@@ -602,18 +604,18 @@ def ciclo_principal(connector, manager, config):
     # Si estamos en modo "Analizando", verificar si podemos operar
     if manager.estado == "Analizando":
         decision, confianza = confirmar_operacion(df, tendencia, fuerza)
-        if decision != 0 and confianza > 60:
+        if decision != 0 and confianza > 55:
             precio_entrada = calcular_retroceso(df, tendencia)
             if precio_entrada:
                 direccion = "COMPRA" if decision == 1 else "VENTA"
-                manager.agregar_evento(f"🎯 Oportunidad detectada en {manager.activo_actual} - {direccion} (confianza {confianza}%)", "🎯")
+                manager.agregar_evento(f"🎯 Oportunidad detectada en {manager.activo_actual} - {direccion} (confianza {confianza}%, tendencia {tipo})", "🎯")
                 manager.agregar_evento(f"📉 Esperando retroceso a {precio_entrada:.5f}...", "📉")
                 manager.estado = "EsperandoRetroceso"
                 manager.precio_objetivo = precio_entrada
                 manager.direccion = direccion
                 manager.confianza = confianza
         else:
-            manager.agregar_evento(f"⏳ {manager.activo_actual} en tendencia {tendencia} pero sin señal clara aún...", "⏳")
+            manager.agregar_evento(f"⏳ {manager.activo_actual} en tendencia {tendencia} ({tipo}, fuerza {fuerza}%) pero sin señal clara aún...", "⏳")
 
     # Si estamos esperando retroceso, verificar si el precio alcanza el objetivo
     elif manager.estado == "EsperandoRetroceso":
@@ -627,7 +629,6 @@ def ciclo_principal(connector, manager, config):
             )
             if id_orden:
                 manager.agregar_evento(f"✅ Orden ejecutada: {manager.direccion} en {manager.activo_actual} por ${config['monto']} (ID: {id_orden})", "✅")
-                # Guardar como pendiente en el manager también
                 manager.ordenes_pendientes[id_orden] = {
                     'activo': manager.activo_actual,
                     'direccion': manager.direccion,
@@ -635,7 +636,6 @@ def ciclo_principal(connector, manager, config):
                     'timestamp': time.time()
                 }
                 manager.estado = "Analizando"  # Volver a analizar el mismo activo
-                # Actualizar balance
                 connector.actualizar_balance()
             else:
                 manager.agregar_evento(f"❌ Error al ejecutar orden: {msg}", "❌")
@@ -675,7 +675,9 @@ def main():
     if 'tendencia_actual' not in st.session_state:
         st.session_state.tendencia_actual = 'desconocida'
         st.session_state.fuerza_actual = 0
+        st.session_state.tipo_tendencia = 'desconocida'
         st.session_state.precio_actual = 0
+        st.session_state.volumen_actual = 0
 
     # Panel superior de configuración
     with st.container():
@@ -771,7 +773,6 @@ def main():
         manager = st.session_state.manager
         resumen = manager.obtener_resumen()
 
-        # Tarjeta de estado con iconos
         icono_estado = {
             "Detenido": "⏹️",
             "Buscando": "🔍",
@@ -784,15 +785,16 @@ def main():
         <div class="status-card">
             <h3><span class="icono-estado">{icono_estado}</span> {manager.estado}</h3>
             <p><strong>Activo actual:</strong> {manager.activo_actual if manager.activo_actual else 'Ninguno'}</p>
-            <p><strong>Tendencia:</strong> {st.session_state.tendencia_actual} (fuerza {st.session_state.fuerza_actual}%)</p>
+            <p><strong>Tendencia:</strong> {st.session_state.tendencia_actual} ({st.session_state.tipo_tendencia}) - Fuerza {st.session_state.fuerza_actual}%</p>
             <p><strong>Precio actual:</strong> {st.session_state.precio_actual:.5f}</p>
+            <p><strong>Volumen:</strong> {st.session_state.volumen_actual:.2f}x</p>
             <p><strong>Operaciones hoy:</strong> {manager.operaciones_hoy} / {st.session_state.config['limite_diario']}</p>
         </div>
         """, unsafe_allow_html=True)
 
         # Barra de progreso animada (simula actividad)
         if st.session_state.bot_activo and manager.estado not in ["Detenido", "Límite alcanzado"]:
-            st.progress(0.5, text="Analizando mercado...")  # Podría ser más dinámico
+            st.progress(0.5, text="Analizando mercado...")
 
         # Log de eventos
         with st.expander("📋 Ver eventos recientes", expanded=True):
@@ -806,7 +808,7 @@ def main():
         st.metric("Perdidas", resumen['perdidas'])
         st.metric("Ganancia neta", f"${resumen['neto']:.2f}")
 
-    # Gráfico en tiempo real del activo actual (llena el espacio)
+    # Gráfico en tiempo real del activo actual
     if manager.activo_actual:
         st.markdown("### 📉 Gráfico en tiempo real")
         df = st.session_state.connector.obtener_velas(manager.activo_actual, intervalo=5, limite=50)
