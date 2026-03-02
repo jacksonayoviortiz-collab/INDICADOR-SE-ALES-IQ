@@ -1,8 +1,10 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN CON UMBRALES DE VOLUMEN ADAPTATIVOS
-- Operaciones de 1 minuto: umbrales de volumen según fuerza de tendencia (0.4x, 0.7x, 1.5x)
-- Filtro de continuidad de tendencia (pendiente EMA20 y posición del precio)
-- Operaciones de 5 minutos: lógica de retrocesos intacta
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN MEJORADA
+- Detecta y opera tendencias alcistas y bajistas con igual criterio
+- Identifica cambios de tendencia (reversiones) usando velas y EMAs
+- Confirmación de continuidad con volumen y pendiente
+- Umbrales de volumen adaptativos según fuerza (0.4x, 0.7x, 1.5x)
+- Lógica de retrocesos simétrica para ambos sentidos
 """
 
 import streamlit as st
@@ -328,6 +330,33 @@ def detectar_soportes_resistencias(df, ventana=20):
     return soportes[-3:], resistencias[-3:]
 
 # ============================================
+# DETECCIÓN DE CAMBIO DE TENDENCIA (REVERSIÓN)
+# ============================================
+def detectar_cambio_tendencia(df):
+    """
+    Analiza las últimas velas para detectar un posible cambio de tendencia.
+    Retorna la nueva dirección ('alcista', 'bajista') o None.
+    """
+    if df is None or len(df) < 5:
+        return None
+    ult = df.iloc[-1]
+    prev = df.iloc[-2]
+    # Pendientes de EMA20
+    pend_corta = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-3]) / 3
+    pend_larga = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
+
+    # Condiciones para posible cambio a alcista
+    if (prev['close'] < prev['ema_20'] and ult['close'] > ult['ema_20'] and
+        pend_corta > 0 and pend_larga > 0 and ult['volume_ratio'] > 1.2):
+        return 'alcista'
+    # Condiciones para posible cambio a bajista
+    elif (prev['close'] > prev['ema_20'] and ult['close'] < ult['ema_20'] and
+          pend_corta < 0 and pend_larga < 0 and ult['volume_ratio'] > 1.2):
+        return 'bajista'
+    else:
+        return None
+
+# ============================================
 # DETECCIÓN DE TENDENCIA Y FUERZA
 # ============================================
 def detectar_tendencia(df):
@@ -439,7 +468,7 @@ def estrategia_5_parabolic_sar_volumen(df):
     return 0, 0
 
 # ============================================
-# IA DE CONFIRMACIÓN (voto por mayoría)
+# IA DE CONFIRMACIÓN (voto por mayoría con peso de tendencia)
 # ============================================
 def confirmar_operacion(df, tendencia, fuerza_tendencia):
     resultados = [
@@ -452,29 +481,34 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
 
     compra_count = 0
     venta_count = 0
+    compra_conf = 0
+    venta_conf = 0
     for dir_, conf in resultados:
         if dir_ == 1:
             compra_count += 1
+            compra_conf += conf
         elif dir_ == -1:
             venta_count += 1
+            venta_conf += conf
 
-    # Dar peso extra a la tendencia
+    # Peso extra por la tendencia (más peso si es muy fuerte)
+    peso_tendencia = fuerza_tendencia / 50  # 2.0 si fuerza=100, 1.0 si fuerza=50
     if tendencia == 'alcista':
-        compra_count += 1
+        compra_count += int(peso_tendencia)
     elif tendencia == 'bajista':
-        venta_count += 1
+        venta_count += int(peso_tendencia)
 
     if compra_count >= 3:
-        conf_promedio = sum(conf for dir_, conf in resultados if dir_ == 1) // max(1, compra_count)
+        conf_promedio = compra_conf // max(1, compra_count)
         return 1, conf_promedio
     elif venta_count >= 3:
-        conf_promedio = sum(conf for dir_, conf in resultados if dir_ == -1) // max(1, venta_count)
+        conf_promedio = venta_conf // max(1, venta_count)
         return -1, conf_promedio
     else:
         return 0, 0
 
 # ============================================
-# DETECCIÓN DE RETROCESO Y DECISIÓN DE VENCIMIENTO (VERSIÓN MEJORADA CON UMBRALES DE VOLUMEN)
+# DETECCIÓN DE RETROCESO Y DECISIÓN DE VENCIMIENTO (SIMÉTRICA PARA AMBAS TENDENCIAS)
 # ============================================
 def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
     """
@@ -487,11 +521,11 @@ def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
     soportes, resistencias = detectar_soportes_resistencias(df)
 
     # --- Filtros generales de seguridad ---
-    # Evitar RSI extremo
+    # Evitar RSI extremo (sobrecompra/venta)
     if ult['rsi'] > 75 or ult['rsi'] < 25:
         return False, 5
 
-    # Verificar continuidad de la tendencia (pendiente EMA20 en últimos 5 periodos)
+    # Verificar continuidad de la tendencia
     pendiente_corta = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
     if tendencia == 'alcista' and (pendiente_corta <= 0 or ult['close'] <= ult['ema_20']):
         return False, 5
@@ -518,7 +552,7 @@ def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
             if not cerca_soporte and not cerca_resistencia:
                 return False, 1
 
-    # --- Lógica de retroceso para operaciones de 5 minutos (sin cambios) ---
+    # --- Lógica de retroceso para operaciones de 5 minutos (simétrica) ---
     if tendencia == 'alcista':
         soporte_cercano = min([s for s in soportes if s < ult['close']], default=None)
         if soporte_cercano and (ult['close'] - soporte_cercano) < 0.002 * ult['close']:
@@ -547,6 +581,7 @@ class TradingManager:
         self.log_eventos = []
         self.ordenes_pendientes = {}
         self.ultima_operacion_timestamp = None
+        self.tendencia_anterior = None  # Para detectar cambios
 
     def agregar_evento(self, mensaje, icono="ℹ️"):
         timestamp = datetime.now(ecuador_tz).strftime('%H:%M:%S')
@@ -664,6 +699,14 @@ def ciclo_principal(connector, manager, config):
     tendencia, fuerza, tipo = detectar_tendencia(df)
     ult = df.iloc[-1]
 
+    # Detectar posible cambio de tendencia
+    nueva_tendencia = detectar_cambio_tendencia(df)
+    if nueva_tendencia and nueva_tendencia != manager.tendencia_anterior:
+        manager.agregar_evento(f"🔄 Posible cambio de tendencia a {nueva_tendencia} en {manager.activo_actual}", "🔄")
+        # Dar oportunidad a que se confirme (seguir analizando)
+
+    manager.tendencia_anterior = tendencia
+
     volumen_tipo = "COMPRA" if ult['close'] > ult['open'] else "VENTA"
 
     st.session_state.tendencia_actual = tendencia
@@ -713,7 +756,7 @@ def ciclo_principal(connector, manager, config):
                         soportes, _ = detectar_soportes_resistencias(df)
                         soporte_cercano = min([s for s in soportes if s < ult['close']], default=ult['ema_20'])
                         precio_entrada = max(soporte_cercano, ult['ema_20'])
-                    else:
+                    else:  # bajista
                         _, resistencias = detectar_soportes_resistencias(df)
                         resistencia_cercana = max([r for r in resistencias if r > ult['close']], default=ult['ema_20'])
                         precio_entrada = min(resistencia_cercana, ult['ema_20'])
@@ -768,7 +811,7 @@ def ciclo_principal(connector, manager, config):
 # ============================================
 def main():
     st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### Modo autónomo con vencimiento variable (1/5 min) | Umbrales de volumen adaptativos")
+    st.markdown("#### Modo autónomo con detección de cambios de tendencia | Alcista/Bajista simétrico")
     st.markdown("---")
 
     # Inicializar estado de sesión
