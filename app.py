@@ -1,10 +1,9 @@
 """
-BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN MEJORADA
-- Detecta y opera tendencias alcistas y bajistas con igual criterio
-- Identifica cambios de tendencia (reversiones) usando velas y EMAs
-- Confirmación de continuidad con volumen y pendiente
-- Umbrales de volumen adaptativos según fuerza (0.4x, 0.7x, 1.5x)
-- Lógica de retrocesos simétrica para ambos sentidos
+BOT DE TRADING PROFESIONAL AUTÓNOMO PARA IQ OPTION - VERSIÓN CON VENCIMIENTO DINÁMICO
+- Elige vencimiento entre 1 y 5 minutos según fuerza, volumen y contexto
+- Filtros adaptativos: menos estrictos para vencimientos cortos
+- Detecta y opera tendencias alcistas y bajistas
+- Identifica cambios de tendencia y reversiones
 """
 
 import streamlit as st
@@ -333,23 +332,16 @@ def detectar_soportes_resistencias(df, ventana=20):
 # DETECCIÓN DE CAMBIO DE TENDENCIA (REVERSIÓN)
 # ============================================
 def detectar_cambio_tendencia(df):
-    """
-    Analiza las últimas velas para detectar un posible cambio de tendencia.
-    Retorna la nueva dirección ('alcista', 'bajista') o None.
-    """
     if df is None or len(df) < 5:
         return None
     ult = df.iloc[-1]
     prev = df.iloc[-2]
-    # Pendientes de EMA20
     pend_corta = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-3]) / 3
     pend_larga = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
 
-    # Condiciones para posible cambio a alcista
     if (prev['close'] < prev['ema_20'] and ult['close'] > ult['ema_20'] and
         pend_corta > 0 and pend_larga > 0 and ult['volume_ratio'] > 1.2):
         return 'alcista'
-    # Condiciones para posible cambio a bajista
     elif (prev['close'] > prev['ema_20'] and ult['close'] < ult['ema_20'] and
           pend_corta < 0 and pend_larga < 0 and ult['volume_ratio'] > 1.2):
         return 'bajista'
@@ -491,8 +483,7 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
             venta_count += 1
             venta_conf += conf
 
-    # Peso extra por la tendencia (más peso si es muy fuerte)
-    peso_tendencia = fuerza_tendencia / 50  # 2.0 si fuerza=100, 1.0 si fuerza=50
+    peso_tendencia = fuerza_tendencia / 50
     if tendencia == 'alcista':
         compra_count += int(peso_tendencia)
     elif tendencia == 'bajista':
@@ -508,65 +499,89 @@ def confirmar_operacion(df, tendencia, fuerza_tendencia):
         return 0, 0
 
 # ============================================
-# DETECCIÓN DE RETROCESO Y DECISIÓN DE VENCIMIENTO (SIMÉTRICA PARA AMBAS TENDENCIAS)
+# CÁLCULO DE VENCIMIENTO ÓPTIMO (1-5 MINUTOS)
 # ============================================
-def evaluar_retroceso_y_vencimiento(df, tendencia, fuerza):
+def calcular_vencimiento_optimo(df, tendencia, fuerza):
     """
-    Retorna (hay_retroceso, vencimiento_recomendado)
-    vencimiento: 1 o 5 minutos
+    Determina el mejor vencimiento (1-5 minutos) basado en:
+    - Pendiente de EMA20
+    - Volumen
+    - RSI
+    - Soportes/resistencias cercanos
+    Retorna (vencimiento, esperar_retroceso)
+    esperar_retroceso: True si se debe esperar un retroceso (para vencimientos >=4), False si se ejecuta ya.
     """
     if df is None or len(df) < 20:
-        return False, 5
+        return 3, False  # valor por defecto
     ult = df.iloc[-1]
     soportes, resistencias = detectar_soportes_resistencias(df)
+    pendiente_corta = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-3]) / 3
+    pendiente_larga = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
 
-    # --- Filtros generales de seguridad ---
-    # Evitar RSI extremo (sobrecompra/venta)
-    if ult['rsi'] > 75 or ult['rsi'] < 25:
-        return False, 5
+    duracion_score = 0
 
-    # Verificar continuidad de la tendencia
-    pendiente_corta = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
-    if tendencia == 'alcista' and (pendiente_corta <= 0 or ult['close'] <= ult['ema_20']):
-        return False, 5
-    if tendencia == 'bajista' and (pendiente_corta >= 0 or ult['close'] >= ult['ema_20']):
-        return False, 5
+    # Pendiente larga (tendencia sostenida)
+    if tendencia == 'alcista':
+        if pendiente_larga > 0:
+            duracion_score += 2
+        if pendiente_corta > pendiente_larga:
+            duracion_score += 1  # acelerando
+        else:
+            duracion_score -= 1  # desacelerando
+    else:
+        if pendiente_larga < 0:
+            duracion_score += 2
+        if pendiente_corta < pendiente_larga:
+            duracion_score += 1
+        else:
+            duracion_score -= 1
 
-    # --- Decisión para operaciones de 1 minuto (basada en fuerza y volumen) ---
-    if fuerza >= 90:
-        if ult['volume_ratio'] >= 0.4:
-            cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
-            cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
-            if not cerca_soporte and not cerca_resistencia:
-                return False, 1
-    elif 75 <= fuerza < 90:
-        if ult['volume_ratio'] >= 0.7:
-            cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
-            cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
-            if not cerca_soporte and not cerca_resistencia:
-                return False, 1
-    elif 55 <= fuerza < 75:
-        if ult['volume_ratio'] >= 1.5:
-            cerca_soporte = any(abs(ult['close'] - s) < 0.001 * ult['close'] for s in soportes) if tendencia == 'alcista' else False
-            cerca_resistencia = any(abs(ult['close'] - r) < 0.001 * ult['close'] for r in resistencias) if tendencia == 'bajista' else False
-            if not cerca_soporte and not cerca_resistencia:
-                return False, 1
+    # Volumen
+    if ult['volume_ratio'] > 2.0:
+        duracion_score -= 2  # posible explosión corta
+    elif ult['volume_ratio'] > 1.5:
+        duracion_score -= 1
+    elif ult['volume_ratio'] < 0.8:
+        duracion_score += 1  # volumen bajo, tendencia lenta
 
-    # --- Lógica de retroceso para operaciones de 5 minutos (simétrica) ---
+    # RSI extremo
+    if ult['rsi'] > 70 or ult['rsi'] < 30:
+        duracion_score -= 2
+
+    # Soportes/resistencias cercanos
     if tendencia == 'alcista':
         soporte_cercano = min([s for s in soportes if s < ult['close']], default=None)
         if soporte_cercano and (ult['close'] - soporte_cercano) < 0.002 * ult['close']:
-            return True, 5
-        if ult['close'] > ult['ema_20'] and (ult['close'] - ult['ema_20']) < 0.0015 * ult['close']:
-            return True, 5
-    elif tendencia == 'bajista':
+            duracion_score += 2  # soporte cerca, puede rebotar
         resistencia_cercana = max([r for r in resistencias if r > ult['close']], default=None)
         if resistencia_cercana and (resistencia_cercana - ult['close']) < 0.002 * ult['close']:
-            return True, 5
-        if ult['close'] < ult['ema_20'] and (ult['ema_20'] - ult['close']) < 0.0015 * ult['close']:
-            return True, 5
+            duracion_score -= 2  # resistencia cerca, puede frenar
+    else:
+        resistencia_cercana = max([r for r in resistencias if r > ult['close']], default=None)
+        if resistencia_cercana and (resistencia_cercana - ult['close']) < 0.002 * ult['close']:
+            duracion_score += 2
+        soporte_cercano = min([s for s in soportes if s < ult['close']], default=None)
+        if soporte_cercano and (ult['close'] - soporte_cercano) < 0.002 * ult['close']:
+            duracion_score -= 2
 
-    return False, 5
+    # Mapear duracion_score a vencimiento (1-5)
+    if duracion_score <= -3:
+        vencimiento = 1
+        esperar_retroceso = False
+    elif duracion_score <= 0:
+        vencimiento = 2
+        esperar_retroceso = False
+    elif duracion_score <= 3:
+        vencimiento = 3
+        esperar_retroceso = False
+    elif duracion_score <= 6:
+        vencimiento = 4
+        esperar_retroceso = True
+    else:
+        vencimiento = 5
+        esperar_retroceso = True
+
+    return vencimiento, esperar_retroceso
 
 # ============================================
 # CLASE PARA GESTIONAR OPERACIONES Y LÍMITES
@@ -581,7 +596,7 @@ class TradingManager:
         self.log_eventos = []
         self.ordenes_pendientes = {}
         self.ultima_operacion_timestamp = None
-        self.tendencia_anterior = None  # Para detectar cambios
+        self.tendencia_anterior = None
 
     def agregar_evento(self, mensaje, icono="ℹ️"):
         timestamp = datetime.now(ecuador_tz).strftime('%H:%M:%S')
@@ -648,7 +663,6 @@ def ciclo_principal(connector, manager, config):
 
     manager.actualizar_resultados(connector)
 
-    # Decidir si buscar nuevo activo
     if manager.activo_actual is None:
         buscar_nuevo = True
     else:
@@ -685,7 +699,6 @@ def ciclo_principal(connector, manager, config):
             manager.agregar_evento("⚠️ No se encontró ningún activo. Reintentando en 5 min...", "⚠️")
             return
 
-    # Analizar activo actual
     df = connector.obtener_velas(manager.activo_actual, intervalo=5, limite=100)
     if df is None:
         manager.agregar_evento(f"❌ Error al obtener datos de {manager.activo_actual}. Buscando otro...", "❌")
@@ -699,11 +712,9 @@ def ciclo_principal(connector, manager, config):
     tendencia, fuerza, tipo = detectar_tendencia(df)
     ult = df.iloc[-1]
 
-    # Detectar posible cambio de tendencia
     nueva_tendencia = detectar_cambio_tendencia(df)
     if nueva_tendencia and nueva_tendencia != manager.tendencia_anterior:
         manager.agregar_evento(f"🔄 Posible cambio de tendencia a {nueva_tendencia} en {manager.activo_actual}", "🔄")
-        # Dar oportunidad a que se confirme (seguir analizando)
 
     manager.tendencia_anterior = tendencia
 
@@ -726,49 +737,48 @@ def ciclo_principal(connector, manager, config):
     if manager.estado == "Analizando":
         decision, confianza = confirmar_operacion(df, tendencia, fuerza)
         if decision != 0:
-            hay_retroceso, vencimiento = evaluar_retroceso_y_vencimiento(df, tendencia, fuerza)
+            vencimiento, esperar_retroceso = calcular_vencimiento_optimo(df, tendencia, fuerza)
             direccion = "COMPRA" if decision == 1 else "VENTA"
 
-            if vencimiento == 1:
+            if not esperar_retroceso:
+                # Vencimiento corto (1-3 min): ejecutar inmediatamente
                 id_orden, msg = connector.colocar_orden(
                     manager.activo_actual,
                     direccion,
                     config['monto'],
-                    expiracion=1
+                    expiracion=vencimiento
                 )
                 if id_orden:
-                    manager.agregar_evento(f"✅ OPERACIÓN EJECUTADA (1m): {direccion} en {manager.activo_actual} - ID: {id_orden}", "✅")
+                    manager.agregar_evento(f"✅ OPERACIÓN EJECUTADA ({vencimiento}m): {direccion} en {manager.activo_actual} - ID: {id_orden}", "✅")
                     manager.ordenes_pendientes[id_orden] = {
                         'activo': manager.activo_actual,
                         'direccion': direccion,
                         'monto': config['monto'],
-                        'expiracion': 1,
+                        'expiracion': vencimiento,
                         'timestamp': time.time()
                     }
-                    st.session_state.senal_actual = "EJECUTADA 1m"
+                    st.session_state.senal_actual = f"EJECUTADA {vencimiento}m"
                     connector.actualizar_balance()
                 else:
-                    manager.agregar_evento(f"❌ Error al ejecutar orden 1m: {msg}", "❌")
+                    manager.agregar_evento(f"❌ Error al ejecutar orden {vencimiento}m: {msg}", "❌")
             else:
-                # Preparar retroceso para 5 minutos
-                if hay_retroceso:
-                    if tendencia == 'alcista':
-                        soportes, _ = detectar_soportes_resistencias(df)
-                        soporte_cercano = min([s for s in soportes if s < ult['close']], default=ult['ema_20'])
-                        precio_entrada = max(soporte_cercano, ult['ema_20'])
-                    else:  # bajista
-                        _, resistencias = detectar_soportes_resistencias(df)
-                        resistencia_cercana = max([r for r in resistencias if r > ult['close']], default=ult['ema_20'])
-                        precio_entrada = min(resistencia_cercana, ult['ema_20'])
+                # Vencimiento largo (4-5 min): esperar retroceso
+                if tendencia == 'alcista':
+                    soportes, _ = detectar_soportes_resistencias(df)
+                    soporte_cercano = min([s for s in soportes if s < ult['close']], default=ult['ema_20'])
+                    precio_entrada = max(soporte_cercano, ult['ema_20'])
                 else:
-                    precio_entrada = ult['ema_20']
+                    _, resistencias = detectar_soportes_resistencias(df)
+                    resistencia_cercana = max([r for r in resistencias if r > ult['close']], default=ult['ema_20'])
+                    precio_entrada = min(resistencia_cercana, ult['ema_20'])
 
-                manager.agregar_evento(f"🎯 Oportunidad a 5 min en {manager.activo_actual} - {direccion} (confianza {confianza}%)", "🎯")
+                manager.agregar_evento(f"🎯 Oportunidad a {vencimiento} min en {manager.activo_actual} - {direccion} (confianza {confianza}%)", "🎯")
                 manager.agregar_evento(f"📉 Esperando retroceso a {precio_entrada:.5f}...", "📉")
                 manager.estado = "EsperandoRetroceso"
                 manager.precio_objetivo = precio_entrada
                 manager.direccion = direccion
                 manager.confianza = confianza
+                manager.vencimiento_objetivo = vencimiento
                 st.session_state.senal_actual = direccion
         else:
             st.session_state.senal_actual = "NEUTRO"
@@ -781,20 +791,20 @@ def ciclo_principal(connector, manager, config):
                 manager.activo_actual,
                 manager.direccion,
                 config['monto'],
-                expiracion=5
+                expiracion=manager.vencimiento_objetivo
             )
             if id_orden:
-                manager.agregar_evento(f"✅ OPERACIÓN EJECUTADA (5m): {manager.direccion} en {manager.activo_actual} - ID: {id_orden}", "✅")
+                manager.agregar_evento(f"✅ OPERACIÓN EJECUTADA ({manager.vencimiento_objetivo}m): {manager.direccion} en {manager.activo_actual} - ID: {id_orden}", "✅")
                 manager.ordenes_pendientes[id_orden] = {
                     'activo': manager.activo_actual,
                     'direccion': manager.direccion,
                     'monto': config['monto'],
-                    'expiracion': 5,
+                    'expiracion': manager.vencimiento_objetivo,
                     'timestamp': time.time()
                 }
                 manager.estado = "Analizando"
                 connector.actualizar_balance()
-                st.session_state.senal_actual = "EJECUTADA 5m"
+                st.session_state.senal_actual = f"EJECUTADA {manager.vencimiento_objetivo}m"
             else:
                 manager.agregar_evento(f"❌ Error al ejecutar orden: {msg}", "❌")
                 manager.estado = "Analizando"
@@ -811,7 +821,7 @@ def ciclo_principal(connector, manager, config):
 # ============================================
 def main():
     st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### Modo autónomo con detección de cambios de tendencia | Alcista/Bajista simétrico")
+    st.markdown("#### Modo autónomo con vencimiento dinámico (1-5 min) | Máxima adaptabilidad")
     st.markdown("---")
 
     # Inicializar estado de sesión
@@ -941,12 +951,9 @@ def main():
         elif st.session_state.senal_actual == 'VENTA':
             signal_class = 'signal-venta'
             signal_text = 'VENTA'
-        elif st.session_state.senal_actual == 'EJECUTADA 1m':
+        elif st.session_state.senal_actual.startswith('EJECUTADA'):
             signal_class = 'signal-ejecutada'
-            signal_text = 'EJECUTADA 1m'
-        elif st.session_state.senal_actual == 'EJECUTADA 5m':
-            signal_class = 'signal-ejecutada'
-            signal_text = 'EJECUTADA 5m'
+            signal_text = st.session_state.senal_actual
         else:
             signal_class = 'signal-neutro'
             signal_text = 'NEUTRO'
