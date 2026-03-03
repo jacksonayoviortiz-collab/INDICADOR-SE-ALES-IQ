@@ -1,8 +1,11 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN CON CORRECCIÓN DE ERRORES
-- Elimina dependencia de get_option_result (simula resultado para pruebas)
-- Manejo de reconexión WebSocket
-- Estabilidad mejorada
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN TENDENCIAS + RETROCESOS 5 MIN
+- Resultados reales con la librería de williansandi
+- Estrategia: detecta tendencia, espera retroceso a EMA20 o soporte/resistencia, opera a 5 min
+- Analiza todos los activos uno por uno (rápido) y elige el mejor
+- Parámetros: monto, cuenta demo/real, límite diario, mercado OTC/normal
+- Botón para reiniciar el límite diario manualmente
+- Historial con resultados reales y exportable
 """
 
 import streamlit as st
@@ -20,9 +23,6 @@ warnings.filterwarnings('ignore')
 
 from streamlit_autorefresh import st_autorefresh
 
-# Configurar logging para ver errores
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 # Importar la API de IQ Option
 try:
     from iqoptionapi.stable_api import IQ_Option
@@ -38,16 +38,16 @@ except ImportError as e:
 
 # Configuración de página
 st.set_page_config(
-    page_title="IQ Option Pro Bot",
-    page_icon="🤖",
+    page_title="IQ Option Trend Bot",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Autorefresh cada 5 segundos (menos frecuente para evitar saturación)
+# Autorefresh cada 5 segundos
 st_autorefresh(interval=5000, key="autorefresh")
 
-# CSS personalizado (mantenemos el mismo)
+# CSS personalizado
 st.markdown("""
 <style>
     @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css');
@@ -135,13 +135,6 @@ st.markdown("""
         background: #1E242C;
         border-radius: 10px;
     }
-    .detalle-operacion {
-        background: #1E242C;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
-        border-left: 4px solid #00FF88;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -149,7 +142,7 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CLASE DE CONEXIÓN IQ OPTION (CON RECONEXIÓN Y VERIFICACIÓN SEGURA)
+# CLASE DE CONEXIÓN IQ OPTION (CON RESULTADOS REALES)
 # ============================================
 class IQOptionConnector:
     def __init__(self):
@@ -159,8 +152,6 @@ class IQOptionConnector:
         self.tipo_cuenta = "PRACTICE"
         self.activos_cache = {}
         self.ordenes_pendientes = {}
-        self.reintentos_conexion = 0
-        self.max_reintentos = 3
 
     def conectar(self, email, password):
         if not IQ_AVAILABLE:
@@ -170,27 +161,12 @@ class IQOptionConnector:
             check, reason = self.api.connect()
             if check:
                 self.conectado = True
-                self.reintentos_conexion = 0
                 self.balance = self.api.get_balance()
                 return True, "Conexión exitosa"
             else:
-                self.conectado = False
                 return False, reason
         except Exception as e:
-            self.conectado = False
             return False, str(e)
-
-    def verificar_conexion(self):
-        """Verifica si la conexión sigue activa y reconecta si es necesario."""
-        if not self.conectado:
-            return False
-        try:
-            # Intentar obtener el balance como prueba
-            self.api.get_balance()
-            return True
-        except:
-            self.conectado = False
-            return False
 
     def cambiar_balance(self, tipo="PRACTICE"):
         if self.conectado:
@@ -200,7 +176,7 @@ class IQOptionConnector:
                 time.sleep(1)
                 self.balance = self.api.get_balance()
                 return True
-            except Exception as e:
+            except:
                 return False
         return False
 
@@ -215,12 +191,9 @@ class IQOptionConnector:
     def obtener_saldo(self):
         return self.balance
 
-    def obtener_activos_disponibles(self, mercado="otc", max_activos=200, force_refresh=False):
+    def obtener_activos_disponibles(self, mercado="otc", max_activos=200):
         if not self.conectado:
             return []
-        cache_key = f"{mercado}_{max_activos}"
-        if not force_refresh and cache_key in self.activos_cache:
-            return self.activos_cache[cache_key]
         try:
             activos_data = self.api.get_all_open_time()
             activos = []
@@ -233,9 +206,7 @@ class IQOptionConnector:
                     for activo, data in activos_data.get(categoria, {}).items():
                         if data.get("open", False) and "-OTC" in activo:
                             activos.append(activo)
-            activos = sorted(activos)[:max_activos]
-            self.activos_cache[cache_key] = activos
-            return activos
+            return sorted(activos)[:max_activos]
         except Exception as e:
             st.error(f"Error obteniendo activos: {e}")
             return []
@@ -244,7 +215,7 @@ class IQOptionConnector:
         if not self.conectado:
             return None
         try:
-            time.sleep(0.15)
+            time.sleep(0.1)  # Reducido para ser más rápido
             if intervalo == 5:
                 velas = self.api.get_candles(activo, 60, limite * 5, time.time())
             else:
@@ -290,14 +261,10 @@ class IQOptionConnector:
             return None, str(e)
 
     def verificar_orden(self, id_orden):
-        """
-        Intenta verificar el resultado de una orden.
-        Primero intenta con get_option_result (si existe), luego con get_optioninfo (común en algunas versiones).
-        Si no funciona, simula un resultado para pruebas (puedes cambiar esto).
-        """
+        """Obtiene el resultado real de una orden."""
         if not self.conectado:
             return None
-        # Intentar con get_option_result (el que mencionaste)
+        # Intentar con get_option_result
         if hasattr(self.api, 'get_option_result'):
             try:
                 resultado = self.api.get_option_result(id_orden)
@@ -309,20 +276,17 @@ class IQOptionConnector:
                     }
             except Exception as e:
                 logging.error(f"Error en get_option_result: {e}")
-        # Intentar con get_optioninfo (alternativa común)
+        # Fallback a get_optioninfo
         if hasattr(self.api, 'get_optioninfo'):
             try:
                 info = self.api.get_optioninfo(id_orden)
                 if info:
-                    # Adaptar según la estructura de info
                     win = info.get('win', False) or info.get('result') == 'win'
                     profit = info.get('profit', 0) or info.get('amount', 0)
                     close_price = info.get('close_price', 0)
                     return {'win': win, 'profit': profit, 'close_price': close_price}
             except Exception as e:
                 logging.error(f"Error en get_optioninfo: {e}")
-        # Si no se pudo verificar, devolvemos None (se tratará como pérdida por seguridad)
-        logging.warning(f"No se pudo verificar la orden {id_orden}, se tratará como pérdida.")
         return None
 
 # ============================================
@@ -342,41 +306,36 @@ def calcular_indicadores(df):
     df['adx'] = adx.adx()
     df['adx_pos'] = adx.adx_pos()
     df['adx_neg'] = adx.adx_neg()
-    bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
-    df['bb_lower'] = bb.bollinger_lband()
-    df['bb_upper'] = bb.bollinger_hband()
-    macd = ta.trend.MACD(df['close'])
-    df['macd'] = macd.macd()
-    df['macd_signal'] = macd.macd_signal()
     return df
 
 # ============================================
-# DETECCIÓN DE TENDENCIA Y FUERZA
+# DETECCIÓN DE TENDENCIA (SOLO ALCISTA/BAJISTA)
 # ============================================
 def detectar_tendencia(df):
-    if df is None or len(df) < 50:
+    """Retorna: 'alcista', 'bajista' o 'lateral', y fuerza (0-100)"""
+    if df is None or len(df) < 30:
         return 'lateral', 0
     ult = df.iloc[-1]
-    pendiente_ema20 = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-10]) / 10
+    pendiente_ema20 = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
     pendiente_ema50 = (df['ema_50'].iloc[-1] - df['ema_50'].iloc[-10]) / 10
     sobre_ema20 = ult['close'] > ult['ema_20']
     sobre_ema50 = ult['close'] > ult['ema_50']
-    volumen_fuerte = ult['volume_ratio'] > 1.2
-    adx_fuerte = ult['adx'] > 25
+    volumen_bueno = ult['volume_ratio'] > 1.0  # Cualquier volumen positivo ayuda
+    adx_bueno = ult['adx'] > 20  # ADX moderado
 
     fuerza = 0
     if pendiente_ema20 > 0:
-        fuerza += 20
+        fuerza += 25
     if pendiente_ema50 > 0:
-        fuerza += 15
-    if sobre_ema20:
-        fuerza += 10
-    if sobre_ema50:
-        fuerza += 10
-    if volumen_fuerte:
-        fuerza += 15
-    if adx_fuerte:
         fuerza += 20
+    if sobre_ema20:
+        fuerza += 15
+    if sobre_ema50:
+        fuerza += 15
+    if volumen_bueno:
+        fuerza += 10
+    if adx_bueno:
+        fuerza += 15
 
     direccion = 'lateral'
     if (pendiente_ema20 > 0 and pendiente_ema50 > 0) or (sobre_ema20 and sobre_ema50):
@@ -387,111 +346,53 @@ def detectar_tendencia(df):
     return direccion, min(100, fuerza)
 
 # ============================================
-# IA TOTAL: DECIDE DIRECCIÓN Y VENCIMIENTO SIN UMBRALES FIJOS
+# DETECCIÓN DE RETROCESO PARA OPERAR
 # ============================================
-def ia_total(df):
-    """
-    Analiza todos los indicadores disponibles y decide:
-    - Dirección: COMPRA, VENTA o NEUTRO
-    - Vencimiento: 1-5 minutos (basado en la fuerza de la señal)
-    - Devuelve también los scores para visualización
-    """
-    if df is None or len(df) < 30:
-        return None, 0, None
-
+def calcular_precio_entrada(df, tendencia):
+    """Calcula el precio al que se debe entrar (retroceso a EMA20 o soporte/resistencia cercano)."""
+    if df is None or len(df) < 20:
+        return None
     ult = df.iloc[-1]
-    tendencia, fuerza = detectar_tendencia(df)
-
-    # Calcular scores ponderados (sin umbrales fijos)
-    score_compra = 0
-    score_venta = 0
-
-    # 1. RSI (contribución suave)
-    if ult['rsi'] < 50:
-        score_compra += (50 - ult['rsi']) * 0.5
-        score_venta -= (50 - ult['rsi']) * 0.3
-    else:
-        score_venta += (ult['rsi'] - 50) * 0.5
-        score_compra -= (ult['rsi'] - 50) * 0.3
-
-    # 2. Volumen (a más volumen, más peso)
-    score_compra += ult['volume_ratio'] * 5
-    score_venta += ult['volume_ratio'] * 5
-
-    # 3. ADX y dirección
-    if ult['adx'] > 20:
-        if ult['adx_pos'] > ult['adx_neg']:
-            score_compra += ult['adx'] * 2
-        elif ult['adx_neg'] > ult['adx_pos']:
-            score_venta += ult['adx'] * 2
-
-    # 4. MACD
-    macd_diff = ult['macd'] - ult['macd_signal']
-    score_compra += macd_diff * 20
-    score_venta -= macd_diff * 20
-
-    # 5. Bandas de Bollinger (cerca de los bordes)
-    if ult['close'] < ult['bb_lower']:
-        score_compra += 30
-    elif ult['close'] > ult['bb_upper']:
-        score_venta += 30
-
-    # 6. Posición respecto a EMAs
-    if ult['close'] > ult['ema_20']:
-        score_compra += 10
-    else:
-        score_venta += 10
-    if ult['close'] > ult['ema_50']:
-        score_compra += 10
-    else:
-        score_venta += 10
-
-    # 7. Fuerza de tendencia
     if tendencia == 'alcista':
-        score_compra += fuerza
+        # Buscar soporte cercano (mínimo reciente)
+        min_reciente = df['low'].iloc[-10:].min()
+        # Precio objetivo: el mayor entre EMA20 y el soporte
+        precio_objetivo = max(ult['ema_20'], min_reciente)
+        # No esperar una diferencia exacta, cualquier precio <= objetivo es bueno
+        return precio_objetivo
     elif tendencia == 'bajista':
-        score_venta += fuerza
+        max_reciente = df['high'].iloc[-10:].max()
+        precio_objetivo = min(ult['ema_20'], max_reciente)
+        return precio_objetivo
+    return None
 
-    # Decisión final: la dirección con mayor score (incluso si la diferencia es pequeña)
-    diferencia = score_compra - score_venta
-    if diferencia > 0:
-        direccion = 'COMPRA'
-        confianza = min(100, abs(diferencia))
-    elif diferencia < 0:
-        direccion = 'VENTA'
-        confianza = min(100, abs(diferencia))
-    else:
-        return None, 0, {'score_compra': score_compra, 'score_venta': score_venta}
-
-    # Vencimiento: cuanto más alta la confianza, más corto el vencimiento
-    if confianza > 80:
-        vencimiento = 1
-    elif confianza > 60:
-        vencimiento = 2
-    elif confianza > 40:
-        vencimiento = 3
-    elif confianza > 20:
-        vencimiento = 4
-    else:
-        vencimiento = 5
-
-    # Detalles para mostrar en el panel
-    detalles = {
-        'direccion': direccion,
-        'confianza': confianza,
-        'vencimiento': vencimiento,
-        'fuerza': fuerza,
+# ============================================
+# ANÁLISIS RÁPIDO DE UN ACTIVO (PARA ESCANEO)
+# ============================================
+def analizar_activo(activo, connector):
+    df = connector.obtener_velas(activo, intervalo=5, limite=100)
+    if df is None:
+        return None
+    df = calcular_indicadores(df)
+    if df is None:
+        return None
+    tendencia, fuerza = detectar_tendencia(df)
+    if tendencia == 'lateral' or fuerza < 30:
+        return None
+    ult = df.iloc[-1]
+    precio_entrada = calcular_precio_entrada(df, tendencia)
+    if precio_entrada is None:
+        return None
+    return {
+        'activo': activo,
         'tendencia': tendencia,
-        'score_compra': round(score_compra, 2),
-        'score_venta': round(score_venta, 2),
-        'rsi': ult['rsi'],
-        'volume_ratio': ult['volume_ratio'],
+        'fuerza': fuerza,
+        'precio_actual': ult['close'],
+        'precio_entrada': precio_entrada,
+        'volumen': ult['volume_ratio'],
         'adx': ult['adx'],
-        'macd_diff': macd_diff,
-        'precio': ult['close']
+        'df': df
     }
-
-    return direccion, vencimiento, detalles
 
 # ============================================
 # CLASE DE GESTIÓN PRINCIPAL
@@ -501,10 +402,11 @@ class TradingManager:
         self.activo_actual = None
         self.estado = "Detenido"
         self.operaciones_hoy = 0
-        self.ultimo_cambio_activo = time.time()
         self.historial = []
         self.log_eventos = []
         self.operacion_activa = None
+        self.precio_objetivo = None
+        self.direccion_objetivo = None
 
     def agregar_evento(self, mensaje, icono="ℹ️"):
         timestamp = datetime.now(ecuador_tz).strftime('%H:%M:%S')
@@ -512,22 +414,34 @@ class TradingManager:
         if len(self.log_eventos) > 20:
             self.log_eventos = self.log_eventos[-20:]
 
-    def iniciar_operacion(self, activo, direccion, expiracion, detalles):
+    def iniciar_espera_retroceso(self, activo, direccion, precio_entrada, detalles):
+        """Inicia la espera de retroceso para una operación de 5 minutos."""
+        self.activo_actual = activo
+        self.direccion_objetivo = direccion
+        self.precio_objetivo = precio_entrada
+        self.estado = f"Esperando retroceso ({activo})"
+        self.agregar_evento(f"🎯 Esperando retroceso en {activo} a {precio_entrada:.5f} para {direccion}", "🎯")
+
+    def iniciar_operacion(self, activo, direccion, monto, detalles, id_orden):
+        """Inicia una operación (se llama cuando se alcanza el retroceso)."""
         ahora = datetime.now(ecuador_tz)
-        vencimiento = ahora + timedelta(minutes=expiracion)
+        vencimiento = ahora + timedelta(minutes=5)
         self.operacion_activa = {
             'activo': activo,
             'direccion': direccion,
-            'expiracion': expiracion,
+            'expiracion': 5,
             'hora_entrada': ahora,
             'hora_vencimiento': vencimiento,
             'detalles': detalles,
             'resultado': None,
             'ganancia': 0,
-            'precio_entrada': detalles.get('precio', 0),
-            'id_orden': None
+            'precio_entrada': detalles.get('precio_actual', 0),
+            'id_orden': id_orden
         }
-        self.agregar_evento(f"✅ Operación iniciada: {direccion} en {activo} ({expiracion} min)", "✅")
+        self.agregar_evento(f"✅ Operación iniciada: {direccion} en {activo} (5 min)", "✅")
+        self.estado = f"Operando ({activo})"
+        self.precio_objetivo = None
+        self.direccion_objetivo = None
 
     def cerrar_operacion(self, resultado, ganancia, precio_salida=None):
         if self.operacion_activa:
@@ -538,6 +452,13 @@ class TradingManager:
             self.operaciones_hoy += 1
             self.agregar_evento(f"{'💰 Ganada' if resultado=='ganada' else '💸 Perdida'} en {self.operacion_activa['activo']} - ${ganancia:.2f}", "💰" if resultado=='ganada' else "💸")
             self.operacion_activa = None
+            self.activo_actual = None
+            self.estado = "Buscando"
+
+    def reiniciar_limite(self):
+        """Reinicia el contador de operaciones diarias."""
+        self.operaciones_hoy = 0
+        self.agregar_evento("🔄 Límite diario reiniciado manualmente", "🔄")
 
     def obtener_resumen(self):
         if not self.historial:
@@ -554,20 +475,13 @@ class TradingManager:
         }
 
 # ============================================
-# CICLO PRINCIPAL (CON VERIFICACIÓN SEGURA)
+# CICLO PRINCIPAL
 # ============================================
 def ciclo_principal(connector, manager, config):
-    tiempo_actual = time.time()
+    ahora = datetime.now(ecuador_tz)
 
-    # Verificar conexión
-    if not connector.verificar_conexion():
-        manager.agregar_evento("⚠️ Conexión perdida, intentando reconectar...", "⚠️")
-        # No hacemos nada más, en el próximo ciclo se intentará reconectar si es necesario
-        return
-
-    # Verificar operación activa
+    # 1. Verificar operación activa (vencimiento)
     if manager.operacion_activa:
-        ahora = datetime.now(ecuador_tz)
         if ahora >= manager.operacion_activa['hora_vencimiento']:
             id_orden = manager.operacion_activa.get('id_orden')
             if id_orden:
@@ -579,115 +493,77 @@ def ciclo_principal(connector, manager, config):
                     else:
                         manager.cerrar_operacion('perdida', -config['monto'], resultado_api.get('close_price'))
                 else:
-                    # No se pudo verificar, asumimos pérdida (por seguridad)
                     manager.cerrar_operacion('perdida', -config['monto'])
             else:
-                # No hay ID de orden (no debería ocurrir)
                 manager.cerrar_operacion('perdida', -config['monto'])
             connector.actualizar_balance()
-            return  # Salir para que en el próximo ciclo se busque nueva operación
+        return  # Si hay operación activa, no hacemos más en este ciclo
 
-    # Límite diario
+    # 2. Verificar límite diario
     if manager.operaciones_hoy >= config['limite_diario']:
         if manager.estado != "Límite alcanzado":
             manager.estado = "Límite alcanzado"
             manager.agregar_evento("⛔ Límite de operaciones diarias alcanzado. Bot detenido.", "⛔")
         return
 
-    # Si hay operación activa, no ejecutamos nueva
-    if manager.operacion_activa:
-        manager.estado = f"Operando ({manager.operacion_activa['activo']})"
+    # 3. Si estamos esperando un retroceso, verificar si se cumple
+    if manager.precio_objetivo is not None and manager.direccion_objetivo is not None:
+        df = connector.obtener_velas(manager.activo_actual, intervalo=5, limite=20)
+        if df is not None and len(df) > 0:
+            ult = df.iloc[-1]
+            if (manager.direccion_objetivo == 'COMPRA' and ult['close'] <= manager.precio_objetivo) or \
+               (manager.direccion_objetivo == 'VENTA' and ult['close'] >= manager.precio_objetivo):
+                # Retroceso alcanzado: ejecutar orden
+                id_orden, msg = connector.colocar_orden(
+                    manager.activo_actual,
+                    manager.direccion_objetivo,
+                    config['monto'],
+                    5
+                )
+                if id_orden:
+                    detalles = {
+                        'activo': manager.activo_actual,
+                        'precio_actual': ult['close'],
+                        'fuerza': 0,  # Podríamos calcularla de nuevo
+                        'volumen': ult['volume_ratio'] if 'volume_ratio' in df.columns else 0,
+                        'adx': ult['adx'] if 'adx' in df.columns else 0
+                    }
+                    manager.iniciar_operacion(manager.activo_actual, manager.direccion_objetivo, config['monto'], detalles, id_orden)
+                    connector.actualizar_balance()
+                else:
+                    manager.agregar_evento(f"❌ Error al enviar orden: {msg}", "❌")
+                    manager.precio_objetivo = None
+                    manager.direccion_objetivo = None
+                    manager.estado = "Buscando"
         return
 
-    # Buscar nuevo activo si es necesario
-    if manager.activo_actual is None:
-        buscar_nuevo = True
+    # 4. No hay operación ni espera: buscar el mejor activo
+    manager.estado = "🔍 Escaneando activos..."
+    activos = connector.obtener_activos_disponibles(config['mercado'], max_activos=100)
+    mejor = None
+    mejor_fuerza = 0
+
+    for act in activos[:50]:  # Analizar hasta 50 activos rápidamente
+        analisis = analizar_activo(act, connector)
+        if analisis and analisis['fuerza'] > mejor_fuerza:
+            mejor_fuerza = analisis['fuerza']
+            mejor = analisis
+
+    if mejor:
+        manager.agregar_evento(f"✅ Mejor activo encontrado: {mejor['activo']} - Tendencia {mejor['tendencia']} (fuerza {mejor['fuerza']}%)", "✅")
+        # Iniciar espera de retroceso
+        direccion = 'COMPRA' if mejor['tendencia'] == 'alcista' else 'VENTA'
+        manager.iniciar_espera_retroceso(mejor['activo'], direccion, mejor['precio_entrada'], mejor)
     else:
-        if manager.estado == "Analizando" and tiempo_actual - manager.ultimo_cambio_activo > 300:
-            manager.agregar_evento(f"⏱️ Tiempo sin señal en {manager.activo_actual}. Buscando otro...", "⏱️")
-            buscar_nuevo = True
-        else:
-            buscar_nuevo = False
-
-    if buscar_nuevo:
-        manager.estado = "🔍 Buscando activos..."
-        manager.agregar_evento("Buscando activos con oportunidades...", "🔍")
-        activos = connector.obtener_activos_disponibles(config['mercado'], max_activos=100)
-        mejores_activos = []
-        for act in activos[:50]:
-            df = connector.obtener_velas(act, intervalo=5, limite=100)
-            if df is None:
-                continue
-            df = calcular_indicadores(df)
-            if df is None:
-                continue
-            tendencia, fuerza = detectar_tendencia(df)
-            if tendencia != 'lateral' and fuerza >= 25:
-                mejores_activos.append((act, fuerza, tendencia, df))
-
-        if mejores_activos:
-            mejores_activos.sort(key=lambda x: x[1], reverse=True)
-            mejor = mejores_activos[0]
-            manager.activo_actual = mejor[0]
-            manager.ultimo_cambio_activo = tiempo_actual
-            manager.agregar_evento(f"✅ Mejor activo: {mejor[0]} - Tendencia {mejor[2]} - Fuerza {mejor[1]}%", "✅")
-            manager.estado = "Analizando"
-        else:
-            manager.agregar_evento("⚠️ No se encontró ningún activo. Reintentando en 5 min...", "⚠️")
-            return
-
-    # Analizar activo actual con IA total
-    df = connector.obtener_velas(manager.activo_actual, intervalo=5, limite=100)
-    if df is None:
-        manager.agregar_evento(f"❌ Error al obtener datos de {manager.activo_actual}. Buscando otro...", "❌")
-        manager.activo_actual = None
-        return
-    df = calcular_indicadores(df)
-    if df is None:
-        manager.activo_actual = None
-        return
-
-    direccion, vencimiento, detalles = ia_total(df)
-
-    if direccion:
-        # Colocar orden real
-        id_orden, msg = connector.colocar_orden(
-            manager.activo_actual,
-            direccion,
-            config['monto'],
-            vencimiento
-        )
-        if id_orden:
-            detalles['id_orden'] = id_orden
-            manager.iniciar_operacion(
-                manager.activo_actual,
-                direccion,
-                vencimiento,
-                detalles
-            )
-            manager.operacion_activa['id_orden'] = id_orden
-            manager.agregar_evento(f"💰 Orden enviada a IQ Option. ID: {id_orden}", "💰")
-            connector.actualizar_balance()
-        else:
-            manager.agregar_evento(f"❌ Error al enviar orden: {msg}", "❌")
-    else:
-        manager.agregar_evento(f"⏳ {manager.activo_actual} sin señal clara según IA...", "⏳")
-
-    # Guardar datos para interfaz
-    if df is not None and len(df) > 0:
-        ult = df.iloc[-1]
-        st.session_state.tendencia_actual, st.session_state.fuerza_actual = detectar_tendencia(df)
-        st.session_state.precio_actual = ult['close']
-        st.session_state.volumen_actual = ult['volume_ratio']
-        st.session_state.activo_actual = manager.activo_actual
-        st.session_state.estado_bot = manager.estado
+        manager.agregar_evento("⏳ No se encontró ningún activo con tendencia clara. Reintentando...", "⏳")
+        time.sleep(5)
 
 # ============================================
 # INTERFAZ PRINCIPAL
 # ============================================
 def main():
-    st.title("🤖 IQ OPTION PROFESSIONAL BOT (IA TOTAL)")
-    st.markdown("#### IA autónoma sin umbrales fijos | Vencimiento dinámico | Historial real")
+    st.title("📈 IQ OPTION TREND BOT (5 MIN RETROCESOS)")
+    st.markdown("#### Analiza todos los activos, espera retroceso y opera con resultados reales")
     st.markdown("---")
 
     # Inicializar estado de sesión
@@ -756,7 +632,7 @@ def main():
             )
 
         with col4:
-            st.markdown("### ⏱️ Límite")
+            st.markdown("### ⏱️ Límite diario")
             st.session_state.config['limite_diario'] = st.number_input(
                 "Operaciones/día",
                 min_value=1,
@@ -777,6 +653,10 @@ def main():
                         st.session_state.manager.estado = "Buscando"
                         st.session_state.manager.agregar_evento("▶️ Bot iniciado", "▶️")
                         st.rerun()
+                # Botón para reiniciar límite
+                if st.button("🔄 Reiniciar límite diario", use_container_width=True):
+                    st.session_state.manager.reiniciar_limite()
+                    st.rerun()
 
     st.markdown("---")
 
@@ -793,47 +673,33 @@ def main():
     manager = st.session_state.manager
     resumen = manager.obtener_resumen()
 
-    # PANEL DE OPERACIÓN ACTIVA
+    # PANEL DE OPERACIÓN ACTIVA O ESPERA
     if manager.operacion_activa:
         op = manager.operacion_activa
-        tiempo_restante = op['hora_vencimiento'] - datetime.now(ecuador_tz)
+        tiempo_restante = op['hora_vencimiento'] - ahora
         segundos_rest = max(0, int(tiempo_restante.total_seconds()))
         minutos_rest = segundos_rest // 60
         segundos_rest = segundos_rest % 60
 
-        st.markdown("### ⏳ OPERACIÓN ACTIVA")
+        st.markdown("### ⏳ OPERACIÓN ACTIVA (5 MIN)")
         with st.container():
             col1, col2 = st.columns([2, 1])
             with col1:
                 st.markdown(f"""
                 <div class="operacion-panel">
                     <h3>{op['activo']} - {op['direccion']}</h3>
-                    <p><strong>Vencimiento:</strong> {op['expiracion']} minutos</p>
                     <p><strong>Hora entrada:</strong> {op['hora_entrada'].strftime('%H:%M:%S')}</p>
                     <p><strong>Hora vencimiento:</strong> {op['hora_vencimiento'].strftime('%H:%M:%S')}</p>
                     <p><strong>Tiempo restante:</strong> <span class="countdown">{minutos_rest:02d}:{segundos_rest:02d}</span></p>
                 </div>
                 """, unsafe_allow_html=True)
-
-                # Detalles de la IA
-                st.markdown("#### 🧠 Decisión de la IA")
-                st.json(op['detalles'])
-
             with col2:
-                # Gráfico rápido
-                df = st.session_state.connector.obtener_velas(op['activo'], intervalo=1, limite=30)
-                if df is not None:
-                    fig = go.Figure(data=[go.Candlestick(x=df.index,
-                                                          open=df['open'],
-                                                          high=df['high'],
-                                                          low=df['low'],
-                                                          close=df['close'])])
-                    fig.update_layout(height=300, margin=dict(l=0, r=0, t=0, b=0),
-                                      paper_bgcolor="#151A24", plot_bgcolor="#151A24",
-                                      font_color="#E0E0E0")
-                    st.plotly_chart(fig, use_container_width=True)
+                st.metric("Precio entrada", f"{op['precio_entrada']:.5f}")
+    elif manager.precio_objetivo is not None:
+        st.markdown("### ⏳ ESPERANDO RETROCESO")
+        st.info(f"Activo: {manager.activo_actual} | Objetivo: {manager.precio_objetivo:.5f} para {manager.direccion_objetivo}")
     else:
-        st.info("No hay operación activa en este momento.")
+        st.info(manager.estado if manager.estado != "Detenido" else "Bot detenido. Presiona INICIAR.")
 
     st.markdown("---")
 
@@ -844,17 +710,13 @@ def main():
         icono_estado = {
             "Detenido": "⏹️",
             "Buscando": "🔍",
-            "Analizando": "📊",
+            "Escaneando": "🔍",
             "Límite alcanzado": "⛔"
-        }.get(manager.estado, "🤖")
+        }.get(manager.estado.split()[0] if manager.estado else "Detenido", "🤖")
 
         st.markdown(f"""
         <div class="status-card">
             <h3><span class="icono-estado">{icono_estado}</span> {manager.estado}</h3>
-            <p><strong>Activo actual:</strong> {st.session_state.get('activo_actual', 'Ninguno')}</p>
-            <p><strong>Tendencia:</strong> {st.session_state.get('tendencia_actual', 'desconocida')} - Fuerza {st.session_state.get('fuerza_actual', 0)}%</p>
-            <p><strong>Precio actual:</strong> {st.session_state.get('precio_actual', 0):.5f}</p>
-            <p><strong>Volumen:</strong> {st.session_state.get('volumen_actual', 0):.2f}x</p>
             <p><strong>Operaciones hoy:</strong> {manager.operaciones_hoy} / {st.session_state.config['limite_diario']}</p>
         </div>
         """, unsafe_allow_html=True)
@@ -864,23 +726,24 @@ def main():
                 st.markdown(f"<div class='evento'>{ev}</div>", unsafe_allow_html=True)
 
     with col2:
-        st.markdown("### 📈 Resumen de operaciones")
+        st.markdown("### 📈 Resumen")
         st.metric("Total operaciones", resumen['total'])
         st.metric("Ganadas", resumen['ganadas'])
         st.metric("Perdidas", resumen['perdidas'])
         st.metric("Ganancia neta", f"${resumen['neto']:.2f}")
 
-    # HISTORIAL COMPLETO
+    # HISTORIAL
     with st.expander("📜 Ver historial completo de operaciones"):
         if manager.historial:
             df_hist = pd.DataFrame(manager.historial)
-            # Aplanar detalles
-            detalles_df = pd.json_normalize(df_hist['detalles'])
-            df_hist = df_hist.drop(columns=['detalles']).join(detalles_df)
-            df_hist = df_hist[['hora_entrada', 'activo', 'direccion', 'expiracion',
-                                'precio_entrada', 'precio_salida', 'resultado', 'ganancia',
-                                'confianza', 'fuerza', 'tendencia', 'score_compra', 'score_venta',
-                                'rsi', 'volume_ratio', 'adx', 'macd_diff']]
+            # Extraer detalles si existen
+            if 'detalles' in df_hist.columns:
+                detalles_df = pd.json_normalize(df_hist['detalles'])
+                df_hist = df_hist.drop(columns=['detalles']).join(detalles_df)
+            # Seleccionar columnas
+            cols = ['hora_entrada', 'activo', 'direccion', 'expiracion', 'precio_entrada', 'precio_salida', 'resultado', 'ganancia', 'fuerza', 'volumen', 'adx']
+            cols = [c for c in cols if c in df_hist.columns]
+            df_hist = df_hist[cols]
             st.dataframe(df_hist, use_container_width=True)
             csv = df_hist.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Exportar historial a CSV", csv, "historial_operaciones.csv", "text/csv")
