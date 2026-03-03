@@ -1,10 +1,10 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN DEFINITIVA
-- Detecta continuación de tendencia
-- Operaciones de 1 minuto basadas en volumen intradía
-- Vencimiento dinámico (1-5 min)
-- 10 estrategias avanzadas
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN OPTIMIZADA
+- Conexión robusta con reintentos y caché
+- 10 estrategias avanzadas (incluyendo 1 min por volumen)
+- Vencimiento dinámico 1-5 min
 - Panel profesional con estadísticas y exportación
+- Compatible con Python 3.10
 """
 
 import streamlit as st
@@ -19,18 +19,12 @@ import time
 import logging
 import warnings
 warnings.filterwarnings('ignore')
-import io
-import base64
+from functools import wraps
 
 from streamlit_autorefresh import st_autorefresh
 
-# Intentar importar librerías de IA (opcional)
-try:
-    from sklearn.ensemble import RandomForestClassifier
-    from xgboost import XGBClassifier
-    ML_AVAILABLE = True
-except:
-    ML_AVAILABLE = False
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Importar la API de IQ Option
 try:
@@ -41,22 +35,22 @@ except ImportError as e:
     st.error(f"""
     ⚠️ **Error crítico:** No se pudo importar la librería `iqoptionapi`.
     Verifica que la línea en `requirements.txt` sea exactamente:
-    `git+https://github.com/williansandi/iqoptionapi-2025-Atualizada-.git#egg=iqoptionapi`
+    `git+https://github.com/williamsandi/iqoptionapi-2025-Atualizada-.git#egg=iqoptionapi`
     Detalle del error: {e}
     """)
 
 # Configuración de página
 st.set_page_config(
-    page_title="IQ Option Pro Bot (IA Total)",
+    page_title="IQ Option Pro Bot (Optimizado)",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Autorefresh cada 3 segundos (más rápido para capturar velas de 1 min)
-st_autorefresh(interval=3000, key="autorefresh")
+# Autorefresh cada 10 segundos (menos agresivo)
+st_autorefresh(interval=10000, key="autorefresh")
 
-# CSS personalizado (profesional)
+# CSS personalizado (mantenemos el mismo)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -141,12 +135,6 @@ st.markdown("""
         background: #1E242C;
         border-radius: 10px;
     }
-    .config-slider {
-        margin: 15px 0;
-        padding: 10px;
-        background: #151A24;
-        border-radius: 15px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -154,7 +142,30 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CLASE DE CONEXIÓN IQ OPTION (MEJORADA)
+# DECORADOR DE REINTENTOS
+# ============================================
+def retry(max_attempts=3, delay=1):
+    """Decorador para reintentar funciones que pueden fallar con backoff exponencial."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            current_delay = delay
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_attempts - 1:
+                        logging.error(f"Fallo definitivo en {func.__name__}: {e}")
+                        raise
+                    logging.warning(f"Intento {attempt+1} falló en {func.__name__}: {e}. Reintentando en {current_delay}s")
+                    time.sleep(current_delay)
+                    current_delay *= 2  # backoff exponencial
+            return None
+        return wrapper
+    return decorator
+
+# ============================================
+# CLASE DE CONEXIÓN OPTIMIZADA
 # ============================================
 class IQOptionConnector:
     def __init__(self):
@@ -165,8 +176,11 @@ class IQOptionConnector:
         self.lista_activos = []
         self.indice_actual = 0
         self.ultima_actualizacion_lista = 0
+        self.credenciales = None  # Guardar para reconexión
 
+    @retry(max_attempts=3, delay=2)
     def conectar(self, email, password):
+        """Intenta conectar con reintentos."""
         if not IQ_AVAILABLE:
             return False, "Librería IQ Option no disponible."
         try:
@@ -175,11 +189,28 @@ class IQOptionConnector:
             if check:
                 self.conectado = True
                 self.balance = self.api.get_balance()
+                self.credenciales = (email, password)
                 return True, "Conexión exitosa"
             else:
                 return False, reason
         except Exception as e:
+            self.conectado = False
             return False, str(e)
+
+    def verificar_conexion(self):
+        """Verifica si la conexión sigue activa y reconecta si es necesario."""
+        if not self.conectado:
+            return False
+        try:
+            self.api.get_balance()
+            return True
+        except Exception as e:
+            logging.warning(f"Conexión perdida: {e}. Intentando reconectar...")
+            self.conectado = False
+            if self.credenciales:
+                ok, _ = self.conectar(*self.credenciales)
+                return ok
+            return False
 
     def cambiar_balance(self, tipo="PRACTICE"):
         if self.conectado:
@@ -205,6 +236,7 @@ class IQOptionConnector:
         return self.balance
 
     def obtener_lista_activos(self, mercado="otc", max_activos=100, force_refresh=False):
+        """Obtiene la lista de activos con caché de 10 minutos."""
         if not self.conectado:
             return []
         ahora = time.time()
@@ -225,7 +257,9 @@ class IQOptionConnector:
                 self.ultima_actualizacion_lista = ahora
                 self.indice_actual = 0
             except Exception as e:
-                st.error(f"Error obteniendo activos: {e}")
+                logging.error(f"Error obteniendo activos: {e}")
+                if not self.lista_activos:
+                    return []
         return self.lista_activos
 
     def obtener_siguiente_activo(self):
@@ -235,46 +269,40 @@ class IQOptionConnector:
         self.indice_actual = (self.indice_actual + 1) % len(self.lista_activos)
         return activo
 
-    def obtener_velas(self, activo, intervalo=5, limite=100, reintentos=2):
+    @retry(max_attempts=2, delay=1)
+    def obtener_velas(self, activo, intervalo=5, limite=100):
         if not self.conectado:
             return None
-        for intento in range(reintentos):
-            try:
-                time.sleep(0.1)
-                if intervalo == 5:
-                    velas = self.api.get_candles(activo, 60, limite * 5, time.time())
-                else:
-                    velas = self.api.get_candles(activo, 60, limite, time.time())
-                if not velas:
-                    if intento == reintentos - 1:
-                        return None
-                    time.sleep(2)
-                    continue
-                df = pd.DataFrame(velas)
-                df['datetime'] = pd.to_datetime(df['from'], unit='s')
-                df = df.set_index('datetime')
-                df = df.rename(columns={
-                    'open': 'open',
-                    'max': 'high',
-                    'min': 'low',
-                    'close': 'close',
-                    'volume': 'volume'
-                })
-                df = df[['open', 'high', 'low', 'close', 'volume']].astype(float).sort_index()
-                if intervalo == 5:
-                    df = df.resample('5T').agg({
-                        'open': 'first',
-                        'high': 'max',
-                        'low': 'min',
-                        'close': 'last',
-                        'volume': 'sum'
-                    }).dropna()
-                return df
-            except Exception as e:
-                if intento == reintentos - 1:
-                    return None
-                time.sleep(2)
-        return None
+        try:
+            if intervalo == 5:
+                velas = self.api.get_candles(activo, 60, limite * 5, time.time())
+            else:
+                velas = self.api.get_candles(activo, 60, limite, time.time())
+            if not velas:
+                return None
+            df = pd.DataFrame(velas)
+            df['datetime'] = pd.to_datetime(df['from'], unit='s')
+            df = df.set_index('datetime')
+            df = df.rename(columns={
+                'open': 'open',
+                'max': 'high',
+                'min': 'low',
+                'close': 'close',
+                'volume': 'volume'
+            })
+            df = df[['open', 'high', 'low', 'close', 'volume']].astype(float).sort_index()
+            if intervalo == 5:
+                df = df.resample('5T').agg({
+                    'open': 'first',
+                    'high': 'max',
+                    'low': 'min',
+                    'close': 'last',
+                    'volume': 'sum'
+                }).dropna()
+            return df
+        except Exception as e:
+            logging.error(f"Error obteniendo velas de {activo}: {e}")
+            return None
 
     def colocar_orden(self, activo, direccion, monto, expiracion):
         if not self.conectado:
@@ -347,16 +375,13 @@ def calcular_indicadores(df):
 # DETECCIÓN DE CONTINUACIÓN DE TENDENCIA
 # ============================================
 def tendencia_continuara(df):
-    """Retorna True si la tendencia actual tiene alta probabilidad de continuar."""
     if df is None or len(df) < 20:
         return False
     ult = df.iloc[-1]
     pendiente_ema20 = (df['ema_20'].iloc[-1] - df['ema_20'].iloc[-5]) / 5
     pendiente_ema50 = (df['ema_50'].iloc[-1] - df['ema_50'].iloc[-10]) / 10
-    # Condiciones para continuación alcista
     if (pendiente_ema20 > 0 and pendiente_ema50 > 0 and ult['adx'] > 20 and ult['volume_ratio'] > 0.8):
         return True
-    # Condiciones para continuación bajista
     if (pendiente_ema20 < 0 and pendiente_ema50 < 0 and ult['adx'] > 20 and ult['volume_ratio'] > 0.8):
         return True
     return False
@@ -365,24 +390,16 @@ def tendencia_continuara(df):
 # PREDICCIÓN DE VELA DE 1 MINUTO POR VOLUMEN
 # ============================================
 def predecir_vela_1min(df_1min):
-    """
-    Analiza velas de 1 minuto recientes y el volumen para predecir si la próxima vela será alcista o bajista.
-    Retorna ('COMPRA', confianza) o ('VENTA', confianza) o (None, 0).
-    """
     if df_1min is None or len(df_1min) < 10:
         return None, 0
     ult = df_1min.iloc[-1]
-    # Calcular volumen relativo
     vol_ma = df_1min['volume'].rolling(10).mean().iloc[-1]
     vol_ratio = ult['volume'] / vol_ma if vol_ma > 0 else 1
-    # Calcular pendiente de precio en últimas 3 velas
     pendiente = (df_1min['close'].iloc[-1] - df_1min['close'].iloc[-3]) / 3
-    # Si volumen es alto y la pendiente es positiva, probable suba
     if vol_ratio > 1.5 and pendiente > 0:
         return 'COMPRA', min(85, 60 + int(vol_ratio * 10))
     elif vol_ratio > 1.5 and pendiente < 0:
         return 'VENTA', min(85, 60 + int(vol_ratio * 10))
-    # Volumen moderado pero con tendencia clara
     elif vol_ratio > 1.0 and abs(pendiente) > 0.001 * ult['close']:
         if pendiente > 0:
             return 'COMPRA', 70
@@ -394,7 +411,6 @@ def predecir_vela_1min(df_1min):
 # 10 ESTRATEGIAS MEJORADAS
 # ============================================
 def evaluar_estrategias(df, df_1min=None):
-    """Evalúa las 10 estrategias y devuelve la mejor señal, confianza y vencimiento."""
     if df is None or len(df) < 30:
         return None, 0, 0, {}
 
@@ -405,7 +421,7 @@ def evaluar_estrategias(df, df_1min=None):
 
     resultados = []
 
-    # Estrategia 0: Operación de 1 minuto por volumen (si tenemos datos de 1 min)
+    # Estrategia 0: 1 minuto por volumen
     if df_1min is not None:
         senal_1min, conf_1min = predecir_vela_1min(df_1min)
         if senal_1min:
@@ -494,7 +510,6 @@ def evaluar_estrategias(df, df_1min=None):
     if not resultados:
         return None, 0, 0, {}
 
-    # Elegir la estrategia con mayor confianza
     mejor = max(resultados, key=lambda x: x[1])
     return mejor[0], mejor[1], mejor[2], {'estrategia': mejor[3], 'confianza': mejor[1]}
 
@@ -541,7 +556,6 @@ class TradingManager:
             self.log_eventos = self.log_eventos[-30:]
 
     def iniciar_operacion_directa(self, activo, direccion, monto, vencimiento, detalles):
-        """Inicia una operación inmediata (sin esperar retroceso), usada para 1 min."""
         ahora = datetime.now(ecuador_tz)
         venc = ahora + timedelta(minutes=vencimiento)
         self.operacion_activa = {
@@ -688,7 +702,11 @@ def ciclo_principal(connector, manager, config):
                     manager.estado = "Buscando"
         return
 
-    # 4. Buscar nuevo activo
+    # 4. Buscar nuevo activo (asegurar conexión)
+    if not connector.verificar_conexion():
+        manager.agregar_evento("⚠️ Conexión perdida, intentando reconectar...", "⚠️")
+        return
+
     manager.estado = "🔍 Analizando activos..."
     activos = connector.obtener_lista_activos(config['mercado'], max_activos=config.get('max_activos', 100))
     if not activos:
@@ -700,7 +718,6 @@ def ciclo_principal(connector, manager, config):
         activo = connector.obtener_siguiente_activo()
         if not activo:
             break
-        # Obtener velas de 5 min y 1 min
         df_5min = connector.obtener_velas(activo, intervalo=5, limite=100)
         if df_5min is None:
             continue
@@ -713,7 +730,6 @@ def ciclo_principal(connector, manager, config):
 
         if direccion and confianza >= config.get('umbral_confianza', 60):
             ult = df_5min.iloc[-1]
-            # Si es operación de 1 minuto (vencimiento 1), ejecutar inmediatamente
             if vencimiento == 1:
                 id_orden, msg = connector.colocar_orden(activo, direccion, config['monto'], 1)
                 if id_orden:
@@ -725,7 +741,6 @@ def ciclo_principal(connector, manager, config):
                 else:
                     manager.agregar_evento(f"❌ Error al enviar orden 1min: {msg}", "❌")
             else:
-                # Para vencimientos mayores, esperar retroceso
                 precio_entrada = calcular_precio_entrada(df_5min, direccion)
                 if precio_entrada:
                     manager.agregar_evento(f"✅ Señal en {activo}: {direccion} (confianza {confianza:.0f}%) - Estrategia: {detalles['estrategia']}", "✅")
@@ -749,7 +764,6 @@ def generar_csv(historial):
     df = pd.DataFrame(historial)
     if 'detalles' in df.columns:
         detalles_df = pd.json_normalize(df['detalles'])
-        # Eliminar columnas duplicadas
         cols_a_eliminar = [col for col in detalles_df.columns if col in df.columns]
         detalles_df = detalles_df.drop(columns=cols_a_eliminar)
         df = df.drop(columns=['detalles']).join(detalles_df)
@@ -759,8 +773,8 @@ def generar_csv(historial):
 # INTERFAZ PRINCIPAL
 # ============================================
 def main():
-    st.title("🤖 IQ OPTION PRO BOT (IA TOTAL)")
-    st.markdown("#### Vencimiento dinámico 1-5 min | Operaciones de 1 min por volumen | Precisión mejorada")
+    st.title("🤖 IQ OPTION PRO BOT (OPTIMIZADO)")
+    st.markdown("#### Conexión robusta | Vencimiento dinámico 1-5 min | 10 estrategias")
     st.markdown("---")
 
     # Inicializar estado de sesión
