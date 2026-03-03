@@ -1,11 +1,11 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN TENDENCIAS + RETROCESOS 5 MIN
-- Resultados reales con la librería de williansandi
-- Estrategia: detecta tendencia, espera retroceso a EMA20 o soporte/resistencia, opera a 5 min
-- Analiza todos los activos uno por uno (rápido) y elige el mejor
-- Parámetros: monto, cuenta demo/real, límite diario, mercado OTC/normal
-- Botón para reiniciar el límite diario manualmente
-- Historial con resultados reales y exportable
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN UN ACTIVO A LA VEZ
+- Analiza un activo por ciclo (el mejor según fuerza)
+- Si no hay tendencia clara, pasa al siguiente
+- Espera retrocesos a EMA20 o soporte/resistencia
+- Vencimiento fijo de 5 minutos
+- Resultados reales con librería williansandi
+- Estable y sin timeouts
 """
 
 import streamlit as st
@@ -38,7 +38,7 @@ except ImportError as e:
 
 # Configuración de página
 st.set_page_config(
-    page_title="IQ Option Trend Bot",
+    page_title="IQ Option Trend Bot (1 Activo)",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -101,23 +101,6 @@ st.markdown("""
         transform: scale(1.05);
         box-shadow: 0 0 15px #00FF88;
     }
-    .signal-badge {
-        font-size: 18px;
-        font-weight: 700;
-        padding: 5px 10px;
-        border-radius: 20px;
-        display: inline-block;
-    }
-    .signal-compra {
-        background: rgba(0, 255, 136, 0.2);
-        color: #00FF88;
-        border: 1px solid #00FF88;
-    }
-    .signal-venta {
-        background: rgba(255, 70, 70, 0.2);
-        color: #FF4646;
-        border: 1px solid #FF4646;
-    }
     .operacion-panel {
         background: linear-gradient(145deg, #1E242C, #151A24);
         border-radius: 20px;
@@ -142,7 +125,7 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CLASE DE CONEXIÓN IQ OPTION (CON RESULTADOS REALES)
+# CLASE DE CONEXIÓN IQ OPTION (CON REINTENTOS)
 # ============================================
 class IQOptionConnector:
     def __init__(self):
@@ -150,8 +133,9 @@ class IQOptionConnector:
         self.conectado = False
         self.balance = 0
         self.tipo_cuenta = "PRACTICE"
-        self.activos_cache = {}
-        self.ordenes_pendientes = {}
+        self.lista_activos = []  # Lista completa de activos para iterar
+        self.indice_actual = 0    # Índice del activo que se está analizando
+        self.ultima_actualizacion_lista = 0
 
     def conectar(self, email, password):
         if not IQ_AVAILABLE:
@@ -191,59 +175,81 @@ class IQOptionConnector:
     def obtener_saldo(self):
         return self.balance
 
-    def obtener_activos_disponibles(self, mercado="otc", max_activos=200):
+    def obtener_lista_activos(self, mercado="otc", max_activos=100, force_refresh=False):
+        """Obtiene la lista de activos (una vez) y la guarda."""
         if not self.conectado:
             return []
-        try:
-            activos_data = self.api.get_all_open_time()
-            activos = []
-            if mercado == "forex":
-                for activo, data in activos_data.get("forex", {}).items():
-                    if data.get("open", False) and "-OTC" not in activo:
-                        activos.append(activo)
-            else:
-                for categoria in ["binary", "turbo"]:
-                    for activo, data in activos_data.get(categoria, {}).items():
-                        if data.get("open", False) and "-OTC" in activo:
+        ahora = time.time()
+        # Refrescar cada 10 minutos o si se fuerza
+        if force_refresh or (ahora - self.ultima_actualizacion_lista > 600) or not self.lista_activos:
+            try:
+                activos_data = self.api.get_all_open_time()
+                activos = []
+                if mercado == "forex":
+                    for activo, data in activos_data.get("forex", {}).items():
+                        if data.get("open", False) and "-OTC" not in activo:
                             activos.append(activo)
-            return sorted(activos)[:max_activos]
-        except Exception as e:
-            st.error(f"Error obteniendo activos: {e}")
-            return []
+                else:
+                    for categoria in ["binary", "turbo"]:
+                        for activo, data in activos_data.get(categoria, {}).items():
+                            if data.get("open", False) and "-OTC" in activo:
+                                activos.append(activo)
+                self.lista_activos = sorted(activos)[:max_activos]
+                self.ultima_actualizacion_lista = ahora
+                self.indice_actual = 0  # Reiniciamos el índice al obtener nueva lista
+            except Exception as e:
+                st.error(f"Error obteniendo activos: {e}")
+                return self.lista_activos  # Devolvemos la lista anterior si hay error
+        return self.lista_activos
 
-    def obtener_velas(self, activo, intervalo=5, limite=100):
+    def obtener_siguiente_activo(self):
+        """Devuelve el siguiente activo en la lista y avanza el índice."""
+        if not self.lista_activos:
+            return None
+        activo = self.lista_activos[self.indice_actual]
+        self.indice_actual = (self.indice_actual + 1) % len(self.lista_activos)
+        return activo
+
+    def obtener_velas(self, activo, intervalo=5, limite=100, reintentos=2):
         if not self.conectado:
             return None
-        try:
-            time.sleep(0.1)  # Reducido para ser más rápido
-            if intervalo == 5:
-                velas = self.api.get_candles(activo, 60, limite * 5, time.time())
-            else:
-                velas = self.api.get_candles(activo, 60, limite, time.time())
-            if not velas:
-                return None
-            df = pd.DataFrame(velas)
-            df['datetime'] = pd.to_datetime(df['from'], unit='s')
-            df = df.set_index('datetime')
-            df = df.rename(columns={
-                'open': 'open',
-                'max': 'high',
-                'min': 'low',
-                'close': 'close',
-                'volume': 'volume'
-            })
-            df = df[['open', 'high', 'low', 'close', 'volume']].astype(float).sort_index()
-            if intervalo == 5:
-                df = df.resample('5T').agg({
-                    'open': 'first',
-                    'high': 'max',
-                    'low': 'min',
-                    'close': 'last',
-                    'volume': 'sum'
-                }).dropna()
-            return df
-        except Exception as e:
-            return None
+        for intento in range(reintentos):
+            try:
+                time.sleep(0.1)
+                if intervalo == 5:
+                    velas = self.api.get_candles(activo, 60, limite * 5, time.time())
+                else:
+                    velas = self.api.get_candles(activo, 60, limite, time.time())
+                if not velas:
+                    if intento == reintentos - 1:
+                        return None
+                    time.sleep(2)
+                    continue
+                df = pd.DataFrame(velas)
+                df['datetime'] = pd.to_datetime(df['from'], unit='s')
+                df = df.set_index('datetime')
+                df = df.rename(columns={
+                    'open': 'open',
+                    'max': 'high',
+                    'min': 'low',
+                    'close': 'close',
+                    'volume': 'volume'
+                })
+                df = df[['open', 'high', 'low', 'close', 'volume']].astype(float).sort_index()
+                if intervalo == 5:
+                    df = df.resample('5T').agg({
+                        'open': 'first',
+                        'high': 'max',
+                        'low': 'min',
+                        'close': 'last',
+                        'volume': 'sum'
+                    }).dropna()
+                return df
+            except Exception as e:
+                if intento == reintentos - 1:
+                    return None
+                time.sleep(2)
+        return None
 
     def colocar_orden(self, activo, direccion, monto, expiracion):
         if not self.conectado:
@@ -309,7 +315,7 @@ def calcular_indicadores(df):
     return df
 
 # ============================================
-# DETECCIÓN DE TENDENCIA (SOLO ALCISTA/BAJISTA)
+# DETECCIÓN DE TENDENCIA
 # ============================================
 def detectar_tendencia(df):
     """Retorna: 'alcista', 'bajista' o 'lateral', y fuerza (0-100)"""
@@ -320,8 +326,8 @@ def detectar_tendencia(df):
     pendiente_ema50 = (df['ema_50'].iloc[-1] - df['ema_50'].iloc[-10]) / 10
     sobre_ema20 = ult['close'] > ult['ema_20']
     sobre_ema50 = ult['close'] > ult['ema_50']
-    volumen_bueno = ult['volume_ratio'] > 1.0  # Cualquier volumen positivo ayuda
-    adx_bueno = ult['adx'] > 20  # ADX moderado
+    volumen_bueno = ult['volume_ratio'] > 1.0
+    adx_bueno = ult['adx'] > 20
 
     fuerza = 0
     if pendiente_ema20 > 0:
@@ -346,7 +352,7 @@ def detectar_tendencia(df):
     return direccion, min(100, fuerza)
 
 # ============================================
-# DETECCIÓN DE RETROCESO PARA OPERAR
+# CÁLCULO DE PRECIO DE RETROCESO
 # ============================================
 def calcular_precio_entrada(df, tendencia):
     """Calcula el precio al que se debe entrar (retroceso a EMA20 o soporte/resistencia cercano)."""
@@ -354,11 +360,8 @@ def calcular_precio_entrada(df, tendencia):
         return None
     ult = df.iloc[-1]
     if tendencia == 'alcista':
-        # Buscar soporte cercano (mínimo reciente)
         min_reciente = df['low'].iloc[-10:].min()
-        # Precio objetivo: el mayor entre EMA20 y el soporte
         precio_objetivo = max(ult['ema_20'], min_reciente)
-        # No esperar una diferencia exacta, cualquier precio <= objetivo es bueno
         return precio_objetivo
     elif tendencia == 'bajista':
         max_reciente = df['high'].iloc[-10:].max()
@@ -367,7 +370,7 @@ def calcular_precio_entrada(df, tendencia):
     return None
 
 # ============================================
-# ANÁLISIS RÁPIDO DE UN ACTIVO (PARA ESCANEO)
+# ANÁLISIS DE UN ACTIVO
 # ============================================
 def analizar_activo(activo, connector):
     df = connector.obtener_velas(activo, intervalo=5, limite=100)
@@ -415,7 +418,6 @@ class TradingManager:
             self.log_eventos = self.log_eventos[-20:]
 
     def iniciar_espera_retroceso(self, activo, direccion, precio_entrada, detalles):
-        """Inicia la espera de retroceso para una operación de 5 minutos."""
         self.activo_actual = activo
         self.direccion_objetivo = direccion
         self.precio_objetivo = precio_entrada
@@ -423,7 +425,6 @@ class TradingManager:
         self.agregar_evento(f"🎯 Esperando retroceso en {activo} a {precio_entrada:.5f} para {direccion}", "🎯")
 
     def iniciar_operacion(self, activo, direccion, monto, detalles, id_orden):
-        """Inicia una operación (se llama cuando se alcanza el retroceso)."""
         ahora = datetime.now(ecuador_tz)
         vencimiento = ahora + timedelta(minutes=5)
         self.operacion_activa = {
@@ -456,7 +457,6 @@ class TradingManager:
             self.estado = "Buscando"
 
     def reiniciar_limite(self):
-        """Reinicia el contador de operaciones diarias."""
         self.operaciones_hoy = 0
         self.agregar_evento("🔄 Límite diario reiniciado manualmente", "🔄")
 
@@ -475,12 +475,12 @@ class TradingManager:
         }
 
 # ============================================
-# CICLO PRINCIPAL
+# CICLO PRINCIPAL (UN ACTIVO A LA VEZ)
 # ============================================
 def ciclo_principal(connector, manager, config):
     ahora = datetime.now(ecuador_tz)
 
-    # 1. Verificar operación activa (vencimiento)
+    # 1. Verificar operación activa
     if manager.operacion_activa:
         if ahora >= manager.operacion_activa['hora_vencimiento']:
             id_orden = manager.operacion_activa.get('id_orden')
@@ -497,23 +497,23 @@ def ciclo_principal(connector, manager, config):
             else:
                 manager.cerrar_operacion('perdida', -config['monto'])
             connector.actualizar_balance()
-        return  # Si hay operación activa, no hacemos más en este ciclo
+        return  # No hacemos más mientras hay operación activa
 
-    # 2. Verificar límite diario
+    # 2. Límite diario
     if manager.operaciones_hoy >= config['limite_diario']:
         if manager.estado != "Límite alcanzado":
             manager.estado = "Límite alcanzado"
             manager.agregar_evento("⛔ Límite de operaciones diarias alcanzado. Bot detenido.", "⛔")
         return
 
-    # 3. Si estamos esperando un retroceso, verificar si se cumple
+    # 3. Esperando retroceso de un activo ya analizado
     if manager.precio_objetivo is not None and manager.direccion_objetivo is not None:
         df = connector.obtener_velas(manager.activo_actual, intervalo=5, limite=20)
         if df is not None and len(df) > 0:
             ult = df.iloc[-1]
             if (manager.direccion_objetivo == 'COMPRA' and ult['close'] <= manager.precio_objetivo) or \
                (manager.direccion_objetivo == 'VENTA' and ult['close'] >= manager.precio_objetivo):
-                # Retroceso alcanzado: ejecutar orden
+                # Retroceso alcanzado
                 id_orden, msg = connector.colocar_orden(
                     manager.activo_actual,
                     manager.direccion_objetivo,
@@ -524,7 +524,7 @@ def ciclo_principal(connector, manager, config):
                     detalles = {
                         'activo': manager.activo_actual,
                         'precio_actual': ult['close'],
-                        'fuerza': 0,  # Podríamos calcularla de nuevo
+                        'fuerza': 0,
                         'volumen': ult['volume_ratio'] if 'volume_ratio' in df.columns else 0,
                         'adx': ult['adx'] if 'adx' in df.columns else 0
                     }
@@ -537,33 +537,43 @@ def ciclo_principal(connector, manager, config):
                     manager.estado = "Buscando"
         return
 
-    # 4. No hay operación ni espera: buscar el mejor activo
-    manager.estado = "🔍 Escaneando activos..."
-    activos = connector.obtener_activos_disponibles(config['mercado'], max_activos=100)
-    mejor = None
-    mejor_fuerza = 0
-
-    for act in activos[:50]:  # Analizar hasta 50 activos rápidamente
-        analisis = analizar_activo(act, connector)
-        if analisis and analisis['fuerza'] > mejor_fuerza:
-            mejor_fuerza = analisis['fuerza']
-            mejor = analisis
-
-    if mejor:
-        manager.agregar_evento(f"✅ Mejor activo encontrado: {mejor['activo']} - Tendencia {mejor['tendencia']} (fuerza {mejor['fuerza']}%)", "✅")
-        # Iniciar espera de retroceso
-        direccion = 'COMPRA' if mejor['tendencia'] == 'alcista' else 'VENTA'
-        manager.iniciar_espera_retroceso(mejor['activo'], direccion, mejor['precio_entrada'], mejor)
-    else:
-        manager.agregar_evento("⏳ No se encontró ningún activo con tendencia clara. Reintentando...", "⏳")
+    # 4. Buscar un nuevo activo (UNO POR VEZ)
+    manager.estado = "🔍 Analizando activos..."
+    # Asegurarse de que tenemos la lista de activos
+    activos = connector.obtener_lista_activos(config['mercado'], max_activos=100)
+    if not activos:
+        manager.agregar_evento("⚠️ No hay activos disponibles. Reintentando en 5 min...", "⚠️")
         time.sleep(5)
+        return
+
+    # Probar activos uno por uno hasta encontrar una tendencia clara
+    activo_probado = None
+    for _ in range(len(activos)):  # Probamos todos si es necesario
+        activo = connector.obtener_siguiente_activo()
+        if not activo:
+            break
+        activo_probado = activo
+        analisis = analizar_activo(activo, connector)
+        if analisis:
+            # Encontramos tendencia clara
+            manager.agregar_evento(f"✅ Activo con tendencia: {activo} - {analisis['tendencia']} (fuerza {analisis['fuerza']}%)", "✅")
+            direccion = 'COMPRA' if analisis['tendencia'] == 'alcista' else 'VENTA'
+            manager.iniciar_espera_retroceso(activo, direccion, analisis['precio_entrada'], analisis)
+            break
+        else:
+            manager.agregar_evento(f"⏳ {activo} sin tendencia clara, pasando al siguiente...", "⏳")
+            time.sleep(0.5)  # Pequeña pausa entre análisis
+
+    if not manager.precio_objetivo:
+        # Si recorrimos todos y ninguno sirvió, reiniciamos el índice (ya se reinició automáticamente)
+        manager.agregar_evento("🔄 No se encontró ningún activo con tendencia. Reiniciando búsqueda...", "🔄")
 
 # ============================================
 # INTERFAZ PRINCIPAL
 # ============================================
 def main():
-    st.title("📈 IQ OPTION TREND BOT (5 MIN RETROCESOS)")
-    st.markdown("#### Analiza todos los activos, espera retroceso y opera con resultados reales")
+    st.title("📈 IQ OPTION TREND BOT (1 ACTIVO A LA VEZ)")
+    st.markdown("#### Analiza un activo por ciclo, espera retrocesos y opera a 5 minutos")
     st.markdown("---")
 
     # Inicializar estado de sesión
@@ -710,7 +720,7 @@ def main():
         icono_estado = {
             "Detenido": "⏹️",
             "Buscando": "🔍",
-            "Escaneando": "🔍",
+            "Analizando": "🔍",
             "Límite alcanzado": "⛔"
         }.get(manager.estado.split()[0] if manager.estado else "Detenido", "🤖")
 
