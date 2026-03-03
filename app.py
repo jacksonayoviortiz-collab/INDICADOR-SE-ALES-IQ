@@ -1,9 +1,8 @@
 """
-BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN FINAL
-- Conexión real a IQ Option (sin simulación)
-- 6 estrategias independientes con IA de vencimiento dinámico
-- Historial detallado para análisis y ventas
-- Panel de operación activa con cuenta regresiva
+BOT DE TRADING PROFESIONAL PARA IQ OPTION - VERSIÓN IA TOTAL
+- IA pura sin umbrales fijos: decide dirección, vencimiento y momento de entrada
+- Integración con get_option_result de iqoptionapi-2025-Atualizada
+- Panel de operación activa, historial detallado y exportable
 - Listo para vender
 """
 
@@ -31,13 +30,13 @@ except ImportError as e:
     st.error(f"""
     ⚠️ **Error crítico:** No se pudo importar la librería `iqoptionapi`.
     Verifica que la línea en `requirements.txt` sea exactamente:
-    `git+https://github.com/williansandi/iqoptionapi-2025-Atualizada-.git#egg=iqoptionapi`
+    `git+https://github.com/williamsandi/iqoptionapi-2025-Atualizada-.git#egg=iqoptionapi`
     Detalle del error: {e}
     """)
 
 # Configuración de página
 st.set_page_config(
-    page_title="IQ Option Pro Bot",
+    page_title="IQ Option Pro Bot (IA Total)",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -148,7 +147,7 @@ st.markdown("""
 ecuador_tz = pytz.timezone('America/Guayaquil')
 
 # ============================================
-# CLASE DE CONEXIÓN IQ OPTION (REAL)
+# CLASE DE CONEXIÓN IQ OPTION (CON VERIFICACIÓN REAL)
 # ============================================
 class IQOptionConnector:
     def __init__(self):
@@ -157,7 +156,7 @@ class IQOptionConnector:
         self.balance = 0
         self.tipo_cuenta = "PRACTICE"
         self.activos_cache = {}
-        self.ordenes_pendientes = {}  # id_orden -> info
+        self.ordenes_pendientes = {}
 
     def conectar(self, email, password):
         if not IQ_AVAILABLE:
@@ -270,17 +269,18 @@ class IQOptionConnector:
 
     def verificar_orden(self, id_orden):
         """
-        Consulta el resultado de una orden por su ID.
-        IMPORTANTE: Debes adaptar esto a la API real de IQ Option.
-        Por ejemplo, si existe self.api.get_optioninfo(id_orden) que devuelva:
-            {'win': True, 'amount': 1.8} (o similar)
+        Verifica el resultado de una orden usando get_option_result.
+        Retorna un dict con 'win', 'profit' y 'close_price' o None si hay error.
         """
         try:
-            # Aquí va la implementación real según tu librería
-            # resultado = self.api.get_optioninfo(id_orden)
-            # if resultado:
-            #     return {'win': resultado['win'], 'amount': resultado['amount']}
-            return None  # Por ahora, retorna None (se debe implementar)
+            resultado = self.api.get_option_result(id_orden)
+            if resultado:
+                return {
+                    'win': resultado.get('win', False),
+                    'profit': resultado.get('profit', 0),
+                    'close_price': resultado.get('close_price', 0)
+                }
+            return None
         except Exception as e:
             logging.error(f"Error verificando orden {id_orden}: {e}")
             return None
@@ -305,6 +305,9 @@ def calcular_indicadores(df):
     bb = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
     df['bb_lower'] = bb.bollinger_lband()
     df['bb_upper'] = bb.bollinger_hband()
+    macd = ta.trend.MACD(df['close'])
+    df['macd'] = macd.macd()
+    df['macd_signal'] = macd.macd_signal()
     return df
 
 # ============================================
@@ -344,114 +347,111 @@ def detectar_tendencia(df):
     return direccion, min(100, fuerza)
 
 # ============================================
-# 6 ESTRATEGIAS INDEPENDIENTES (con IA de vencimiento)
+# IA TOTAL: DECIDE DIRECCIÓN Y VENCIMIENTO SIN UMBRALES FIJOS
 # ============================================
-def estrategia_1_ruptura_rapida(df, fuerza):
-    """Estrategia 1: Ruptura de rango con volumen, vencimiento 1-2 min"""
-    if df is None or len(df) < 15:
-        return None
-    ult = df.iloc[-1]
-    max_5 = df['high'].iloc[-5:-1].max()
-    min_5 = df['low'].iloc[-5:-1].min()
-    if ult['close'] > max_5 and ult['volume_ratio'] > 1.3:
-        return 'COMPRA'
-    elif ult['close'] < min_5 and ult['volume_ratio'] > 1.3:
-        return 'VENTA'
-    return None
-
-def estrategia_2_soporte_resistencia(df, fuerza):
-    """Estrategia 2: Rebotar en soportes/resistencias, vencimiento 2-3 min"""
-    if df is None or len(df) < 20:
-        return None
-    ult = df.iloc[-1]
-    # Máximos y mínimos de las últimas 20 velas
-    max_20 = df['high'].iloc[-20:].max()
-    min_20 = df['low'].iloc[-20:].min()
-    if ult['close'] <= min_20 * 1.002 and ult['volume_ratio'] > 1.1:
-        return 'COMPRA'
-    elif ult['close'] >= max_20 * 0.998 and ult['volume_ratio'] > 1.1:
-        return 'VENTA'
-    return None
-
-def estrategia_3_tendencia_ema(df, fuerza):
-    """Estrategia 3: Seguir tendencia con retroceso a EMA, vencimiento 3-4 min"""
+def ia_total(df):
+    """
+    Analiza todos los indicadores disponibles y decide:
+    - Dirección: COMPRA, VENTA o NEUTRO
+    - Vencimiento: 1-5 minutos (basado en la fuerza de la señal)
+    - Devuelve también los scores para visualización
+    """
     if df is None or len(df) < 30:
-        return None
-    ult = df.iloc[-1]
-    if fuerza > 50:
-        if ult['close'] > ult['ema_20'] and (ult['close'] - ult['ema_20']) / ult['close'] < 0.005:
-            return 'COMPRA'
-        elif ult['close'] < ult['ema_20'] and (ult['ema_20'] - ult['close']) / ult['close'] < 0.005:
-            return 'VENTA'
-    return None
+        return None, 0, None
 
-def estrategia_4_adx_fuerte(df, fuerza):
-    """Estrategia 4: ADX alto indica tendencia fuerte, vencimiento 4-5 min"""
-    if df is None or len(df) < 30:
-        return None
     ult = df.iloc[-1]
-    if ult['adx'] > 30:
-        if ult['adx_pos'] > ult['adx_neg']:
-            return 'COMPRA'
-        elif ult['adx_neg'] > ult['adx_pos']:
-            return 'VENTA'
-    return None
+    tendencia, fuerza = detectar_tendencia(df)
 
-def estrategia_5_macd_histograma(df, fuerza):
-    """Estrategia 5: Cruce de MACD con volumen, vencimiento variable"""
-    if df is None or len(df) < 30:
-        return None
-    macd = ta.trend.MACD(df['close'])
-    df['macd'] = macd.macd()
-    df['macd_signal'] = macd.macd_signal()
-    ult = df.iloc[-1]
-    if df['macd'].iloc[-1] > df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] <= df['macd_signal'].iloc[-2] and ult['volume_ratio'] > 1.1:
-        return 'COMPRA'
-    elif df['macd'].iloc[-1] < df['macd_signal'].iloc[-1] and df['macd'].iloc[-2] >= df['macd_signal'].iloc[-2] and ult['volume_ratio'] > 1.1:
-        return 'VENTA'
-    return None
+    # Calcular scores ponderados (sin umbrales fijos)
+    score_compra = 0
+    score_venta = 0
 
-def estrategia_6_multivencimiento(df, fuerza):
-    """Estrategia 6: IA que elige vencimiento según fuerza y volumen"""
-    if df is None or len(df) < 20:
-        return None
-    ult = df.iloc[-1]
-    if fuerza >= 70 and ult['volume_ratio'] > 1.0:
-        return 'COMPRA' if ult['close'] > ult['open'] else 'VENTA'
-    elif fuerza >= 50 and ult['volume_ratio'] > 1.3:
-        return 'COMPRA' if ult['close'] > ult['open'] else 'VENTA'
-    elif fuerza >= 30 and ult['volume_ratio'] > 1.5:
-        return 'COMPRA' if ult['close'] > ult['open'] else 'VENTA'
-    return None
-
-# ============================================
-# IA QUE DECIDE VENCIMIENTO
-# ============================================
-def decidir_vencimiento(fuerza, volumen, estrategia):
-    """Devuelve vencimiento (1-5 min) según fuerza y volumen"""
-    if fuerza >= 80:
-        if volumen > 2.0:
-            return 1
-        elif volumen > 1.5:
-            return 2
-        else:
-            return 2
-    elif fuerza >= 60:
-        if volumen > 2.0:
-            return 2
-        elif volumen > 1.3:
-            return 3
-        else:
-            return 3
-    elif fuerza >= 40:
-        if volumen > 2.0:
-            return 3
-        elif volumen > 1.5:
-            return 4
-        else:
-            return 4
+    # 1. RSI (contribución suave)
+    if ult['rsi'] < 50:
+        score_compra += (50 - ult['rsi']) * 0.5
+        score_venta -= (50 - ult['rsi']) * 0.3
     else:
-        return 5
+        score_venta += (ult['rsi'] - 50) * 0.5
+        score_compra -= (ult['rsi'] - 50) * 0.3
+
+    # 2. Volumen (a más volumen, más peso)
+    score_compra += ult['volume_ratio'] * 5
+    score_venta += ult['volume_ratio'] * 5
+
+    # 3. ADX y dirección
+    if ult['adx'] > 20:
+        if ult['adx_pos'] > ult['adx_neg']:
+            score_compra += ult['adx'] * 2
+        elif ult['adx_neg'] > ult['adx_pos']:
+            score_venta += ult['adx'] * 2
+
+    # 4. MACD
+    macd_diff = ult['macd'] - ult['macd_signal']
+    score_compra += macd_diff * 20
+    score_venta -= macd_diff * 20
+
+    # 5. Bandas de Bollinger (cerca de los bordes)
+    if ult['close'] < ult['bb_lower']:
+        score_compra += 30
+    elif ult['close'] > ult['bb_upper']:
+        score_venta += 30
+
+    # 6. Posición respecto a EMAs
+    if ult['close'] > ult['ema_20']:
+        score_compra += 10
+    else:
+        score_venta += 10
+    if ult['close'] > ult['ema_50']:
+        score_compra += 10
+    else:
+        score_venta += 10
+
+    # 7. Fuerza de tendencia
+    if tendencia == 'alcista':
+        score_compra += fuerza
+    elif tendencia == 'bajista':
+        score_venta += fuerza
+
+    # Decisión final: la dirección con mayor score (incluso si la diferencia es pequeña)
+    diferencia = score_compra - score_venta
+    if diferencia > 0:
+        direccion = 'COMPRA'
+        confianza = min(100, abs(diferencia))
+    elif diferencia < 0:
+        direccion = 'VENTA'
+        confianza = min(100, abs(diferencia))
+    else:
+        return None, 0, {'score_compra': score_compra, 'score_venta': score_venta}
+
+    # Vencimiento: cuanto más alta la confianza, más corto el vencimiento
+    if confianza > 80:
+        vencimiento = 1
+    elif confianza > 60:
+        vencimiento = 2
+    elif confianza > 40:
+        vencimiento = 3
+    elif confianza > 20:
+        vencimiento = 4
+    else:
+        vencimiento = 5
+
+    # Detalles para mostrar en el panel
+    detalles = {
+        'direccion': direccion,
+        'confianza': confianza,
+        'vencimiento': vencimiento,
+        'fuerza': fuerza,
+        'tendencia': tendencia,
+        'score_compra': round(score_compra, 2),
+        'score_venta': round(score_venta, 2),
+        'rsi': ult['rsi'],
+        'volume_ratio': ult['volume_ratio'],
+        'adx': ult['adx'],
+        'macd_diff': macd_diff,
+        'precio': ult['close']
+    }
+
+    return direccion, vencimiento, detalles
 
 # ============================================
 # CLASE DE GESTIÓN PRINCIPAL
@@ -465,7 +465,6 @@ class TradingManager:
         self.historial = []
         self.log_eventos = []
         self.operacion_activa = None
-        self.ultimo_analisis = {}
 
     def agregar_evento(self, mensaje, icono="ℹ️"):
         timestamp = datetime.now(ecuador_tz).strftime('%H:%M:%S')
@@ -473,22 +472,22 @@ class TradingManager:
         if len(self.log_eventos) > 20:
             self.log_eventos = self.log_eventos[-20:]
 
-    def iniciar_operacion(self, activo, direccion, expiracion, estrategia, detalles):
+    def iniciar_operacion(self, activo, direccion, expiracion, detalles):
         ahora = datetime.now(ecuador_tz)
         vencimiento = ahora + timedelta(minutes=expiracion)
         self.operacion_activa = {
             'activo': activo,
             'direccion': direccion,
             'expiracion': expiracion,
-            'estrategia': estrategia,
             'hora_entrada': ahora,
             'hora_vencimiento': vencimiento,
             'detalles': detalles,
             'resultado': None,
             'ganancia': 0,
-            'precio_entrada': detalles.get('precio', 0)
+            'precio_entrada': detalles.get('precio', 0),
+            'id_orden': None
         }
-        self.agregar_evento(f"✅ Operación iniciada: {direccion} en {activo} ({expiracion} min) - Estrategia {estrategia}", "✅")
+        self.agregar_evento(f"✅ Operación iniciada: {direccion} en {activo} ({expiracion} min)", "✅")
 
     def cerrar_operacion(self, resultado, ganancia, precio_salida=None):
         if self.operacion_activa:
@@ -515,34 +514,30 @@ class TradingManager:
         }
 
 # ============================================
-# CICLO PRINCIPAL (REAL)
+# CICLO PRINCIPAL (CON IA TOTAL)
 # ============================================
 def ciclo_principal(connector, manager, config):
     tiempo_actual = time.time()
 
-    # Verificar si la operación activa ha vencido
+    # Verificar operación activa
     if manager.operacion_activa:
         ahora = datetime.now(ecuador_tz)
         if ahora >= manager.operacion_activa['hora_vencimiento']:
-            # Obtener resultado real desde IQ Option
-            # Necesitaríamos tener el ID de la orden guardado. Aquí asumimos que lo tenemos en detalles
-            id_orden = manager.operacion_activa.get('detalles', {}).get('id_orden')
+            id_orden = manager.operacion_activa.get('id_orden')
             if id_orden:
                 resultado_api = connector.verificar_orden(id_orden)
                 if resultado_api:
-                    if resultado_api.get('win'):
-                        ganancia = config['monto'] * 0.8  # Ajusta según payout real
+                    if resultado_api['win']:
+                        ganancia = resultado_api['profit']  # Profit real
                         manager.cerrar_operacion('ganada', ganancia, resultado_api.get('close_price'))
                     else:
                         manager.cerrar_operacion('perdida', -config['monto'], resultado_api.get('close_price'))
                 else:
-                    # Si no se puede verificar, asumimos pérdida (por seguridad)
                     manager.cerrar_operacion('perdida', -config['monto'])
             else:
-                # No hay ID, no podemos verificar (esto no debería ocurrir)
                 manager.cerrar_operacion('perdida', -config['monto'])
-            # Actualizar balance
             connector.actualizar_balance()
+            return  # Salir para que en el próximo ciclo se busque nueva operación
 
     # Límite diario
     if manager.operaciones_hoy >= config['limite_diario']:
@@ -551,12 +546,12 @@ def ciclo_principal(connector, manager, config):
             manager.agregar_evento("⛔ Límite de operaciones diarias alcanzado. Bot detenido.", "⛔")
         return
 
-    # Si hay operación activa, no ejecutamos nuevas, pero seguimos analizando
+    # Si hay operación activa, no ejecutamos nueva
     if manager.operacion_activa:
         manager.estado = f"Operando ({manager.operacion_activa['activo']})"
-        return  # No buscamos nuevas operaciones mientras hay una activa
+        return
 
-    # No hay operación activa: buscar y ejecutar
+    # Buscar nuevo activo si es necesario
     if manager.activo_actual is None:
         buscar_nuevo = True
     else:
@@ -579,7 +574,7 @@ def ciclo_principal(connector, manager, config):
             if df is None:
                 continue
             tendencia, fuerza = detectar_tendencia(df)
-            if tendencia != 'lateral' and fuerza >= 25:  # Umbral bajo para más oportunidades
+            if tendencia != 'lateral' and fuerza >= 25:
                 mejores_activos.append((act, fuerza, tendencia, df))
 
         if mejores_activos:
@@ -593,7 +588,7 @@ def ciclo_principal(connector, manager, config):
             manager.agregar_evento("⚠️ No se encontró ningún activo. Reintentando en 5 min...", "⚠️")
             return
 
-    # Analizar activo actual
+    # Analizar activo actual con IA total
     df = connector.obtener_velas(manager.activo_actual, intervalo=5, limite=100)
     if df is None:
         manager.agregar_evento(f"❌ Error al obtener datos de {manager.activo_actual}. Buscando otro...", "❌")
@@ -604,44 +599,13 @@ def ciclo_principal(connector, manager, config):
         manager.activo_actual = None
         return
 
-    tendencia, fuerza = detectar_tendencia(df)
-    ult = df.iloc[-1]
+    direccion, vencimiento, detalles = ia_total(df)
 
-    # Evaluar todas las estrategias
-    estrategias = [
-        ('Ruptura rápida', estrategia_1_ruptura_rapida),
-        ('Soporte/Resistencia', estrategia_2_soporte_resistencia),
-        ('Retroceso EMA', estrategia_3_tendencia_ema),
-        ('ADX fuerte', estrategia_4_adx_fuerte),
-        ('MACD', estrategia_5_macd_histograma),
-        ('Multi-IA', estrategia_6_multivencimiento)
-    ]
-
-    mejor_senal = None
-    mejor_estrategia = None
-    for nombre, func in estrategias:
-        senal = func(df, fuerza)
-        if senal:
-            mejor_senal = senal
-            mejor_estrategia = nombre
-            break  # Tomamos la primera que da señal (podríamos evaluar todas y elegir la mejor)
-
-    if mejor_senal:
-        # Decidir vencimiento con IA
-        vencimiento = decidir_vencimiento(fuerza, ult['volume_ratio'], mejor_estrategia)
-        detalles = {
-            'fuerza': fuerza,
-            'volumen': ult['volume_ratio'],
-            'rsi': ult['rsi'],
-            'adx': ult['adx'],
-            'tendencia': tendencia,
-            'precio': ult['close'],
-            'estrategia_usada': mejor_estrategia
-        }
+    if direccion:
         # Colocar orden real
         id_orden, msg = connector.colocar_orden(
             manager.activo_actual,
-            mejor_senal,
+            direccion,
             config['monto'],
             vencimiento
         )
@@ -649,33 +613,33 @@ def ciclo_principal(connector, manager, config):
             detalles['id_orden'] = id_orden
             manager.iniciar_operacion(
                 manager.activo_actual,
-                mejor_senal,
+                direccion,
                 vencimiento,
-                mejor_estrategia,
                 detalles
             )
+            manager.operacion_activa['id_orden'] = id_orden
             manager.agregar_evento(f"💰 Orden enviada a IQ Option. ID: {id_orden}", "💰")
-            # Actualizar balance (aunque no ha cambiado aún)
             connector.actualizar_balance()
         else:
             manager.agregar_evento(f"❌ Error al enviar orden: {msg}", "❌")
     else:
-        manager.agregar_evento(f"⏳ {manager.activo_actual} en tendencia {tendencia} (fuerza {fuerza}%) sin señal clara...", "⏳")
+        manager.agregar_evento(f"⏳ {manager.activo_actual} sin señal clara según IA...", "⏳")
 
-    # Guardar datos para la interfaz
-    st.session_state.tendencia_actual = tendencia
-    st.session_state.fuerza_actual = fuerza
-    st.session_state.precio_actual = ult['close']
-    st.session_state.volumen_actual = ult['volume_ratio']
-    st.session_state.activo_actual = manager.activo_actual
-    st.session_state.estado_bot = manager.estado
+    # Guardar datos para interfaz
+    if df is not None and len(df) > 0:
+        ult = df.iloc[-1]
+        st.session_state.tendencia_actual, st.session_state.fuerza_actual = detectar_tendencia(df)
+        st.session_state.precio_actual = ult['close']
+        st.session_state.volumen_actual = ult['volume_ratio']
+        st.session_state.activo_actual = manager.activo_actual
+        st.session_state.estado_bot = manager.estado
 
 # ============================================
 # INTERFAZ PRINCIPAL
 # ============================================
 def main():
-    st.title("🤖 IQ OPTION PROFESSIONAL BOT")
-    st.markdown("#### 6 estrategias con IA | Vencimiento dinámico | Historial real")
+    st.title("🤖 IQ OPTION PROFESSIONAL BOT (IA TOTAL)")
+    st.markdown("#### IA autónoma sin umbrales fijos | Vencimiento dinámico | Historial real")
     st.markdown("---")
 
     # Inicializar estado de sesión
@@ -796,7 +760,6 @@ def main():
                 st.markdown(f"""
                 <div class="operacion-panel">
                     <h3>{op['activo']} - {op['direccion']}</h3>
-                    <p><strong>Estrategia:</strong> {op['estrategia']}</p>
                     <p><strong>Vencimiento:</strong> {op['expiracion']} minutos</p>
                     <p><strong>Hora entrada:</strong> {op['hora_entrada'].strftime('%H:%M:%S')}</p>
                     <p><strong>Hora vencimiento:</strong> {op['hora_vencimiento'].strftime('%H:%M:%S')}</p>
@@ -804,8 +767,8 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Detalles de la operación
-                st.markdown("#### 📊 Datos de la señal")
+                # Detalles de la IA
+                st.markdown("#### 🧠 Decisión de la IA")
                 st.json(op['detalles'])
 
             with col2:
@@ -826,7 +789,7 @@ def main():
 
     st.markdown("---")
 
-    # PANEL DE ESTADO Y ANÁLISIS EN CURSO
+    # PANEL DE ESTADO
     col1, col2 = st.columns([1.2, 0.8])
     with col1:
         st.markdown("### 📊 Estado del Bot")
@@ -859,22 +822,18 @@ def main():
         st.metric("Perdidas", resumen['perdidas'])
         st.metric("Ganancia neta", f"${resumen['neto']:.2f}")
 
-    # HISTORIAL COMPLETO (PROFESIONAL)
+    # HISTORIAL COMPLETO
     with st.expander("📜 Ver historial completo de operaciones"):
         if manager.historial:
-            # Crear DataFrame con columnas relevantes
             df_hist = pd.DataFrame(manager.historial)
-            # Extraer detalles si es necesario
-            df_hist['fuerza'] = df_hist['detalles'].apply(lambda x: x.get('fuerza', ''))
-            df_hist['volumen'] = df_hist['detalles'].apply(lambda x: x.get('volumen', ''))
-            df_hist['rsi'] = df_hist['detalles'].apply(lambda x: x.get('rsi', ''))
-            df_hist['adx'] = df_hist['detalles'].apply(lambda x: x.get('adx', ''))
-            # Seleccionar columnas finales
-            df_hist = df_hist[['hora_entrada', 'activo', 'direccion', 'estrategia', 'expiracion',
-                               'precio_entrada', 'precio_salida', 'resultado', 'ganancia',
-                               'fuerza', 'volumen', 'rsi', 'adx']]
+            # Aplanar detalles
+            detalles_df = pd.json_normalize(df_hist['detalles'])
+            df_hist = df_hist.drop(columns=['detalles']).join(detalles_df)
+            df_hist = df_hist[['hora_entrada', 'activo', 'direccion', 'expiracion',
+                                'precio_entrada', 'precio_salida', 'resultado', 'ganancia',
+                                'confianza', 'fuerza', 'tendencia', 'score_compra', 'score_venta',
+                                'rsi', 'volume_ratio', 'adx', 'macd_diff']]
             st.dataframe(df_hist, use_container_width=True)
-            # Botón para exportar a CSV
             csv = df_hist.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Exportar historial a CSV", csv, "historial_operaciones.csv", "text/csv")
         else:
